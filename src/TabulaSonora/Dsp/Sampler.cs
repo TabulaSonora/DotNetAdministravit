@@ -23,7 +23,32 @@ public enum SamplerMode
 /// <param name="LoopStart">Index of the loop point.</param>
 /// <param name="DataEnd">Number of decodable samples.</param>
 /// <param name="Mode">Which sampler variant applies.</param>
-public sealed record DecodedWave(float[] Samples, int[] Steps, int LoopStart, int DataEnd, SamplerMode Mode);
+public sealed record DecodedWave(float[] Samples, int[] Steps, int LoopStart, int DataEnd, SamplerMode Mode)
+{
+    /// <summary>
+    /// The buffer a forward loop reads from, or <see langword="null"/> for the other modes.
+    /// </summary>
+    /// <remarks>
+    /// The 4-tap window reaches two samples past the read index, so the buffer must carry the samples
+    /// the loop wraps to rather than whatever follows it. It is the wave plus a few wrapped samples —
+    /// a fixed size, independent of how long a note holds — so it is built once with the wave and
+    /// shared by every voice that plays it.
+    /// </remarks>
+    public float[]? LoopBuffer { get; init; }
+
+    /// <summary>
+    /// The forward loop's period in samples.
+    /// </summary>
+    /// <remarks>
+    /// Inclusive of the data end: one pass plays <c>LoopStart..DataEnd</c>. Dropping that last sample
+    /// is inaudible on a long loop but detunes a short single-cycle one outright — a 63 against 64
+    /// sample period is 27 cents sharp.
+    /// </remarks>
+    public int LoopPeriod => DataEnd - LoopStart + 1;
+
+    /// <summary>Whether a forward loop is actually in effect.</summary>
+    public bool IsLooping => Mode == SamplerMode.Loop && DataEnd > LoopStart + 1 && LoopBuffer is not null;
+}
 
 /// <summary>
 /// Wave playback: decode, then resample at a moving rate while honouring the loop.
@@ -93,7 +118,10 @@ public sealed class Sampler
             : sampleCount - loopStart > 0 ? SamplerMode.Loop
             : SamplerMode.OneShot;
 
-        return new DecodedWave(samples, steps, loopStart, sampleCount, mode);
+        var wave = new DecodedWave(samples, steps, loopStart, sampleCount, mode);
+        return mode == SamplerMode.Loop && sampleCount > loopStart + 1
+            ? wave with { LoopBuffer = BuildLoopBuffer(wave) }
+            : wave;
     }
 
     /// <summary>Plays a wave at a constant rate.</summary>
@@ -155,14 +183,9 @@ public sealed class Sampler
             return output;
         }
 
-        var looping = wave.Mode == SamplerMode.Loop && dataEnd > loopStart + 1;
-        if (looping)
+        if (wave.IsLooping)
         {
-            // The forward loop is INCLUSIVE of the data end: one pass plays loopStart..dataEnd, so
-            // the period is dataEnd - loopStart + 1. Dropping that last sample is inaudible on a long
-            // loop but detunes a short single-cycle one outright -- a 63 against 64 sample period is
-            // 27 cents sharp.
-            var period = dataEnd - loopStart + 1;
+            var period = wave.LoopPeriod;
             var wrapped = new double[positions.Length];
             for (var i = 0; i < positions.Length; i++)
             {
@@ -172,8 +195,7 @@ public sealed class Sampler
                     : loopStart + Modulo(p - (dataEnd + 1), period);
             }
 
-            var buffer = BuildLoopBuffer(wave, period);
-            _interpolator.Resample(buffer, wrapped, output);
+            _interpolator.Resample(wave.LoopBuffer!, wrapped, output);
             return output;
         }
 
@@ -200,11 +222,11 @@ public sealed class Sampler
     /// <summary>
     /// Builds the buffer a forward loop reads from, with the wrapped samples appended.
     /// </summary>
-    private static float[] BuildLoopBuffer(DecodedWave wave, int period)
+    private static float[] BuildLoopBuffer(DecodedWave wave)
     {
-        // The 4-tap window reaches two samples past the read index, so the buffer must carry the
-        // samples the loop wraps to rather than whatever follows it. Both the data and the repeated
-        // region are inclusive of the data end, matching the loop's own period.
+        // Both the data and the repeated region are inclusive of the data end, matching the loop's
+        // own period.
+        var period = wave.LoopPeriod;
         var required = wave.DataEnd + 4;
         var buffer = new List<float>(required);
 

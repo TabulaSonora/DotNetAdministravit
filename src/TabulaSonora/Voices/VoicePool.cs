@@ -80,6 +80,15 @@ public sealed class VoicePool
     private long _counter;
     private int _nextNoteGroup;
 
+    /// <summary>
+    /// Called with the index of each slot taken from a sounding note, before it is reassigned.
+    /// </summary>
+    /// <remarks>
+    /// A host that renders voices needs this: the slot is about to be overwritten, so whatever was
+    /// sounding in it has to be moved somewhere it can fade out. Cutting it dead instead clicks.
+    /// </remarks>
+    public Action<int>? Stealing { get; set; }
+
     /// <summary>Number of slots currently sounding.</summary>
     public int ActiveCount
     {
@@ -127,11 +136,13 @@ public sealed class VoicePool
         {
             index = 0;
         }
-        else
+
+        if (_state[index] != VoiceState.Free)
         {
             // Take the whole note, not half of it: a surviving partial of a stolen note would keep
             // sounding on its own.
             StealGroup(_noteGroup[index], index);
+            Stealing?.Invoke(index);
         }
 
         _state[index] = VoiceState.Held;
@@ -251,9 +262,10 @@ public sealed class VoicePool
 
         for (var i = 0; i < MaxVoices; i++)
         {
-            if (i != except && _noteGroup[i] == noteGroup)
+            if (i != except && _noteGroup[i] == noteGroup && _state[i] != VoiceState.Free)
             {
                 _state[i] = VoiceState.Free;
+                Stealing?.Invoke(i);
             }
         }
     }

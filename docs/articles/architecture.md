@@ -93,6 +93,53 @@ Solid arrows are the audio path; dotted arrows are control-rate parameter flow.
 Partials **sum**. Each is an independent voice dispatched into one accumulation buffer; there is no
 divide-by-count anywhere, and averaging would silently halve every two-partial patch.
 
+## Two ways to drive it
+
+The same signal path is driven by two renderers, which differ in *when* they know things rather than
+in what they compute.
+
+| | [`SequenceRenderer`](xref:TabulaSonora.SequenceRenderer) | [`ToneGenerator`](xref:TabulaSonora.Realtime.ToneGenerator) |
+|---|---|---|
+| unit of work | one whole note | one 32-sample block |
+| note length | known before rendering | discovered when note-off arrives |
+| polyphony | unbounded | 64 voices, stolen when full |
+| controllers | latched at note-on, curves per sample | live, re-read every block |
+| effect type | one per song | changes when the file says so |
+| speed | ~15× realtime | ~75× realtime |
+
+Neither is a reimplementation of the other. The envelopes, the sampler, the filter and the tables are
+one set of objects that both drive; the offline path fills arrays from them and the block loop steps
+them. That is why a single note with no controller movement comes out **identical to float epsilon**
+through either — asserted in the test suite, not asserted by hand.
+
+### The block loop
+
+```mermaid
+flowchart TD
+    EV["events due this block<br/><small>already on the 32-sample grid</small>"] --> ALLOC
+    ALLOC["VoicePool<br/><small>allocate, release, steal</small>"] --> TICK
+
+    subgraph tick["every 10th block &mdash; the 100 Hz control tick"]
+        TICK["pitch envelope, both LFOs,<br/>filter coefficients"]
+    end
+
+    TICK --> VOICES["for each sounding partial<br/><small>sampler &rarr; filter &rarr; amplitude</small>"]
+    VOICES --> MIX["pan, part volume, three send levels"]
+    MIX --> DRY["dry L/R"]
+    MIX --> SENDS["reverb / chorus / delay buses"]
+    SENDS --> FXB["effects"] --> DRY
+    DRY --> BLOCK["32 samples out"]
+```
+
+A block never straddles a control tick: voices start on the block grid and the tick is ten blocks
+long, so the coefficient refresh always lands on a boundary.
+
+Two details are load-bearing. A stolen voice is **faded, not cut** — 4 ms at level and 6 ms down,
+which is what the engine does when a drum choke group fires, and a hard stop instead is an audible
+click. And the filter's coefficients are taken from the cutoff envelope's **mean over the block they
+will serve**, not from its value at the tick: the envelope can cross several segments inside one
+10 ms tick, and a single sample point costs about 1.7% of peak on a piano attack.
+
 ## Things that are easy to get wrong
 
 These are all asserted in the test suite, because each one is silent when wrong:

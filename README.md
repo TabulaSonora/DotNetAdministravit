@@ -75,19 +75,38 @@ dotnet run -c Release --project src/TabulaSonora.Player -- \
 A terminal player with a progress bar, peak meters, pause, and seeking. `--list-devices` enumerates
 outputs; `--device` picks one by name or index.
 
+Playback starts immediately: the song is synthesised through the block loop as it plays, at about
+seventy times realtime on one core. `--prerender` renders it in full first instead, which makes
+seeking exact and lets the meters look ahead rather than behind.
+
 Audio goes out through [OwnAudioSharp](https://github.com/modernmube/ownaudiosharp). By default it
 opens **WASAPI at 32 kHz** — the engine's own rate, so nothing resamples on the way to the device.
 PortAudio's fallback host on Windows is MME, which is far too coarse for smooth playback, hence the
 explicit default; override with `--host`.
 
-The song is rendered before playback rather than synthesised under the audio callback, because the
-engine renders offline. At better than ten times realtime the wait is short, and it makes seeking
-free and exact. A true streaming path would need the block-based voice loop the hardware uses, which
-this project does not implement.
-
 If it stutters, raise `--latency` (default 150 ms). The send loop is paced from managed code against
 the device's own frame counter, and a `Thread.Sleep(1)` on Windows routinely lasts 15 ms, so the lead
 has to cover the scheduler's worst nap rather than its average one.
+
+### Two renderers, one signal path
+
+`SequenceRenderer` renders each note whole and sums them; `Realtime.ToneGenerator` is the engine's own
+block loop — MIDI in, 32 samples out, nothing known in advance. They are not two implementations. The
+envelopes, sampler, filter and tables are one set of objects that both drive, so a single note with no
+controller movement comes out **identical to float epsilon** through either, which the test suite
+asserts.
+
+What the block loop adds is everything that needs a running engine: a note of unknown length, live
+controllers, GS effect types that change mid-song, and the hardware's own 64-voice limit with stealing
+— which the offline path, having no notion of *now*, cannot express. `render --stream` renders a file
+through it for comparison.
+
+```csharp
+var engine = ToneGenerator.Create(rom);
+engine.SendChannel(0x90, 60, 100);       // note on
+engine.Render(left, right);              // hold it for as long as you like
+engine.SendChannel(0x80, 60, 0);         // note off, whenever
+```
 
 ### Render options
 
@@ -96,7 +115,8 @@ different tone numbers and pulls samples from different parts of the ROM.
 
 `--mute 1,2` / `--solo 5,6` take channels the way a mixer labels them, 1–16. `--tail`, `--end`, and
 `--no-reverb` / `--no-chorus` / `--no-delay` do what they say; the effects are on by default because
-the module always has them.
+the module always has them. `--stream` renders through the real-time block loop instead of note by
+note — about five times faster, and bounded to 64 voices.
 
 ## Documentation
 
@@ -119,7 +139,7 @@ clone with no DLL present. Pushing to `main` publishes the site via GitHub Actio
 
 | path | what |
 |---|---|
-| `src/TabulaSonora` | the library — `Rom`, `Patches`, `Dsp`, `Voices`, `Effects`, `Midi` |
+| `src/TabulaSonora` | the library — `Rom`, `Patches`, `Dsp`, `Voices`, `Effects`, `Midi`, `Realtime` |
 | `src/TabulaSonora.Tools` | CLI: `prepare`, `render`, `extract-tables`, `info` |
 | `src/TabulaSonora.Player` | terminal MIDI player, audio out via OwnAudioSharp |
 | `tests/TabulaSonora.Tests` | conformance and differential tests |

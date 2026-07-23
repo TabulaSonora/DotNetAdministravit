@@ -4,6 +4,7 @@ using OwnaudioNET;
 using TabulaSonora;
 using TabulaSonora.Patches;
 using TabulaSonora.Player;
+using TabulaSonora.Realtime;
 using TabulaSonora.Rom;
 
 if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
@@ -31,6 +32,7 @@ var sampleRate = NoteRenderer.SampleRate;   // the engine's own rate; no convers
 var bufferFrames = 512;
 var gain = 1.0f;
 var latencyMs = 150;
+var prerender = false;
 string? device = null;
 
 // MME is PortAudio's fallback host on Windows and is far too coarse for smooth playback.
@@ -62,6 +64,7 @@ try
             case "--tail":
                 options = options with { TailSeconds = double.Parse(args[++i], CultureInfo.InvariantCulture) };
                 break;
+            case "--prerender": prerender = true; break;
             case "--no-reverb": options = options with { Reverb = false }; break;
             case "--no-chorus": options = options with { Chorus = false }; break;
             case "--no-delay": options = options with { Delay = false }; break;
@@ -81,7 +84,7 @@ catch (IndexOutOfRangeException)
 
 try
 {
-    return Play(dllPath, midiPath, options, sampleRate, bufferFrames, latencyMs, gain, device, host);
+    return Play(dllPath, midiPath, options, prerender, sampleRate, bufferFrames, latencyMs, gain, device, host);
 }
 catch (RomIdentityException ex)
 {
@@ -109,6 +112,7 @@ static void Usage() => Console.WriteLine("""
       --buffer <frames> device buffer (default 512)
       --latency <ms>    how far ahead to keep the device fed (default 150)
       --gain <x>        linear output gain (default 1.0)
+      --prerender       render the whole song first instead of streaming it
       --tail <sec>      release tail past the last event
       --mute 1,2        silence channels, as a mixer labels them (1-16)
       --solo 5,6        hear only these channels
@@ -170,41 +174,14 @@ static ChannelMask Channels(ChannelMask? mask, string list, bool mute)
 }
 
 static int Play(
-    string dllPath, string midiPath, RenderOptions options,
+    string dllPath, string midiPath, RenderOptions options, bool prerender,
     int sampleRate, int bufferFrames, int latencyMs, float gain, string? device, EngineHostType host)
 {
     using var rom = RomImage.Open(dllPath, RomVerification.Quick);
 
-    // Render up front. The engine synthesises offline, so this is not a real-time path -- but at
-    // better than ten times realtime the wait is short, and it makes seeking free and exact.
-    Console.Write($"Rendering {Path.GetFileName(midiPath)} ");
-    var started = Environment.TickCount64;
-    var lastStep = -1;
-
-    var progress = new Progress<double>(p =>
-    {
-        var step = (int)(p * 20);
-        if (step > lastStep)
-        {
-            lastStep = step;
-            Console.Write('.');
-        }
-    });
-
-    var renderer = SequenceRenderer.Create(rom);
-    var result = renderer.RenderFile(midiPath, options with { Progress = progress });
-    var elapsed = (Environment.TickCount64 - started) / 1000.0;
-
-    var buffer = new PlaybackBuffer(result.Left, result.Right, result.SampleRate);
-    Console.WriteLine();
-    Console.WriteLine(
-        $"  {buffer.Duration:mm\\:ss}, {result.NoteCount} notes, peak {result.Peak:F3} - " +
-        $"rendered in {elapsed:F1}s ({buffer.Duration.TotalSeconds / Math.Max(elapsed, 0.001):F0}x realtime)");
-
-    if (result.Peak * gain > 1.0f)
-    {
-        Console.WriteLine($"  note: peak x gain is {result.Peak * gain:F2}, so the output will clip.");
-    }
+    var buffer = prerender
+        ? Prerender(rom, midiPath, options, gain)
+        : Streaming(rom, midiPath, options);
 
     if (sampleRate != buffer.SampleRate)
     {
@@ -241,6 +218,73 @@ static int Play(
     return 0;
 }
 
+/// <summary>
+/// Plays through the engine's block-based voice loop, synthesising as it goes.
+/// </summary>
+/// <remarks>
+/// The default. Playback starts at once, polyphony is bounded at the engine's own 64 voices, and a
+/// note lasts exactly as long as the file holds it.
+/// </remarks>
+static IPlaybackSource Streaming(RomImage rom, string midiPath, RenderOptions options)
+{
+    var generator = ToneGenerator.Create(rom, new ToneGeneratorOptions
+    {
+        Map = options.Map,
+        DrumChannel = options.DrumChannel,
+        Reverb = options.Reverb,
+        Chorus = options.Chorus,
+        Delay = options.Delay,
+        DrumRingSeconds = options.DrumRingSeconds,
+        Channels = options.Channels,
+    });
+
+    var player = SequencePlayer.FromFile(generator, midiPath);
+    var source = new StreamingSource(player, options.TailSeconds);
+
+    Console.WriteLine($"{Path.GetFileName(midiPath)}  {source.Duration:mm\\:ss}  streaming");
+    return source;
+}
+
+/// <summary>
+/// Renders the whole song first, then plays the result.
+/// </summary>
+/// <remarks>
+/// Slower to start and proportional in memory to the song's length, but it makes seeking exact and
+/// lets the meters read material that already exists.
+/// </remarks>
+static IPlaybackSource Prerender(RomImage rom, string midiPath, RenderOptions options, float gain)
+{
+    Console.Write($"Rendering {Path.GetFileName(midiPath)} ");
+    var started = Environment.TickCount64;
+    var lastStep = -1;
+
+    var progress = new Progress<double>(p =>
+    {
+        var step = (int)(p * 20);
+        if (step > lastStep)
+        {
+            lastStep = step;
+            Console.Write('.');
+        }
+    });
+
+    var result = SequenceRenderer.Create(rom).RenderFile(midiPath, options with { Progress = progress });
+    var elapsed = (Environment.TickCount64 - started) / 1000.0;
+
+    var buffer = new PlaybackBuffer(result.Left, result.Right, result.SampleRate);
+    Console.WriteLine();
+    Console.WriteLine(
+        $"  {buffer.Duration:mm\\:ss}, {result.NoteCount} notes, peak {result.Peak:F3} - " +
+        $"rendered in {elapsed:F1}s ({buffer.Duration.TotalSeconds / Math.Max(elapsed, 0.001):F0}x realtime)");
+
+    if (result.Peak * gain > 1.0f)
+    {
+        Console.WriteLine($"  note: peak x gain is {result.Peak * gain:F2}, so the output will clip.");
+    }
+
+    return buffer;
+}
+
 static bool SelectDevice(string device)
 {
     var devices = OwnaudioNet.GetOutputDevices();
@@ -273,7 +317,7 @@ static bool SelectDevice(string device)
     return true;
 }
 
-static void Stream(PlaybackBuffer buffer, float gain, int bufferFrames, int latencyMs)
+static void Stream(IPlaybackSource buffer, float gain, int bufferFrames, int latencyMs)
 {
     var block = new float[bufferFrames * 2];
     var silence = new float[bufferFrames * 2];
@@ -364,7 +408,7 @@ static void Stream(PlaybackBuffer buffer, float gain, int bufferFrames, int late
     }
 }
 
-static void Draw(PlaybackBuffer buffer, bool paused, float gain)
+static void Draw(IPlaybackSource buffer, bool paused, float gain)
 {
     const int width = 32;
 

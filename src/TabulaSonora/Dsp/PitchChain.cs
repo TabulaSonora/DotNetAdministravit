@@ -17,6 +17,107 @@ public readonly record struct PitchEnvelope(
     double ReleaseMs);
 
 /// <summary>
+/// Walks a pitch envelope one control tick at a time.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Unlike the TVA and TVF envelopes, this one is not a function of elapsed time: a segment completes
+/// when a 16-bit phase accumulator reaches 0xffff — not exceeds it — and the next segment starts with
+/// a fresh phase rather than carrying the remainder, so the trajectory depends on the accumulator's
+/// history. It therefore has to be stepped rather than evaluated.
+/// </para>
+/// <para>
+/// The value is stepwise, held for the whole control block, and the value returned by
+/// <see cref="Tick"/> is the state <em>after</em> that tick's update.
+/// </para>
+/// </remarks>
+public sealed class PitchEnvelopeRunner
+{
+    private readonly int[] _targets;
+    private readonly int[] _rates;
+    private readonly int _release;
+    private readonly int _releaseRate;
+
+    private double _segmentStart;
+    private double _level;
+    private int _segment;
+    private int _phase;
+    private bool _released;
+
+    /// <summary>Creates a runner over a decoded envelope.</summary>
+    /// <param name="envelope">The decoded targets and timings.</param>
+    public PitchEnvelopeRunner(PitchEnvelope envelope)
+    {
+        _targets = envelope.Targets;
+        _release = envelope.Release;
+        _releaseRate = PitchChain.SegmentRateWord(envelope.ReleaseMs);
+
+        _rates = new int[envelope.Times.Length];
+        for (var i = 0; i < _rates.Length; i++)
+        {
+            _rates[i] = PitchChain.SegmentRateWord(envelope.Times[i]);
+        }
+
+        _segmentStart = envelope.Start;
+        _level = envelope.Start;
+    }
+
+    /// <summary>The offset in milli-semitones after the last tick.</summary>
+    public double Level => _level;
+
+    /// <summary>Advances one control tick.</summary>
+    /// <param name="released">Whether the note has been released by this tick.</param>
+    /// <returns>The offset in milli-semitones.</returns>
+    public double Tick(bool released)
+    {
+        double target;
+        int rate;
+
+        if (released && !_released)
+        {
+            _released = true;
+            _segmentStart = _level;
+            _segment = -1;
+            _phase = 0;
+            target = _release;
+            rate = _releaseRate;
+        }
+        else if (_segment < 0)
+        {
+            target = _release;
+            rate = _releaseRate;
+        }
+        else if (_segment < _rates.Length)
+        {
+            target = _targets[_segment];
+            rate = _rates[_segment];
+        }
+        else
+        {
+            return _level;
+        }
+
+        _phase += rate;
+        if (_phase >= 0xFFFF)
+        {
+            _level = target;
+            _segmentStart = target;
+            _phase = 0;
+            if (_segment >= 0)
+            {
+                _segment++;
+            }
+        }
+        else
+        {
+            _level = _segmentStart + ((target - _segmentStart) * (_phase / 65536.0));
+        }
+
+        return _level;
+    }
+}
+
+/// <summary>
 /// The pitch side of a voice: key-follow, transposition, the pitch envelope, and bend.
 /// </summary>
 /// <remarks>
@@ -255,9 +356,8 @@ public sealed class PitchChain
     /// <param name="tickCount">How many control ticks to produce.</param>
     /// <returns>The offsets, or <see langword="null"/> when the envelope is inactive.</returns>
     /// <remarks>
-    /// The value is stepwise, held for the whole control block, and tick <c>i</c> is the state
-    /// <em>after</em> that tick's update. A segment completes when the phase reaches 0xffff — not
-    /// exceeds it — and the next segment starts with a fresh phase rather than carrying the remainder.
+    /// Tick <c>i</c> is the state <em>after</em> that tick's update; see
+    /// <see cref="PitchEnvelopeRunner"/> for why the envelope has to be stepped rather than evaluated.
     /// </remarks>
     public double[]? EnvelopeTicks(
         PartialParameters partial,
@@ -266,82 +366,46 @@ public sealed class PitchChain
         double holdSeconds,
         int tickCount)
     {
+        var runner = CreateEnvelopeRunner(partial, key, velocity);
+        if (runner is null)
+        {
+            return null;
+        }
+
+        var output = new double[Math.Max(0, tickCount)];
+        var noteOffTick = (int)(holdSeconds * 100);
+
+        for (var i = 0; i < output.Length; i++)
+        {
+            output[i] = runner.Tick(i >= noteOffTick);
+        }
+
+        return output;
+    }
+
+    /// <summary>
+    /// Creates a runner for a partial's pitch envelope.
+    /// </summary>
+    /// <param name="partial">The partial's parameter block.</param>
+    /// <param name="key">MIDI key.</param>
+    /// <param name="velocity">MIDI velocity.</param>
+    /// <returns>The runner, or <see langword="null"/> when the envelope does nothing.</returns>
+    /// <remarks>
+    /// An envelope whose start, four targets and release are all zero is not merely flat — it is
+    /// absent, and skipping it saves the pitch chain a per-tick update on most patches.
+    /// </remarks>
+    public PitchEnvelopeRunner? CreateEnvelopeRunner(PartialParameters partial, int key, int velocity)
+    {
         var envelope = EnvelopeOffsets(partial, key, velocity);
         if (envelope is null)
         {
             return null;
         }
 
-        var (start, targets, release, times, releaseMs) = envelope.Value;
-        if (start == 0 && Array.TrueForAll(targets, t => t == 0) && release == 0)
-        {
-            return null;
-        }
-
-        var rates = new int[4];
-        for (var i = 0; i < 4; i++)
-        {
-            rates[i] = SegmentRateWord(times[i]);
-        }
-
-        var output = new double[Math.Max(0, tickCount)];
-        double segmentStart = start;
-        double level = start;
-        var segment = 0;
-        var phase = 0;
-        var noteOffTick = (int)(holdSeconds * 100);
-        var released = false;
-
-        for (var i = 0; i < output.Length; i++)
-        {
-            double target;
-            int rate;
-
-            if (i >= noteOffTick && !released)
-            {
-                released = true;
-                segmentStart = level;
-                segment = -1;
-                phase = 0;
-                target = release;
-                rate = SegmentRateWord(releaseMs);
-            }
-            else if (segment < 0)
-            {
-                target = release;
-                rate = SegmentRateWord(releaseMs);
-            }
-            else if (segment < 4)
-            {
-                target = targets[segment];
-                rate = rates[segment];
-            }
-            else
-            {
-                output[i] = level;
-                continue;
-            }
-
-            phase += rate;
-            if (phase >= 0xFFFF)
-            {
-                level = target;
-                segmentStart = target;
-                phase = 0;
-                if (segment >= 0)
-                {
-                    segment++;
-                }
-            }
-            else
-            {
-                level = segmentStart + ((target - segmentStart) * (phase / 65536.0));
-            }
-
-            output[i] = level;
-        }
-
-        return output;
+        var (start, targets, release, _, _) = envelope.Value;
+        return start == 0 && Array.TrueForAll(targets, t => t == 0) && release == 0
+            ? null
+            : new PitchEnvelopeRunner(envelope.Value);
     }
 
     /// <summary>

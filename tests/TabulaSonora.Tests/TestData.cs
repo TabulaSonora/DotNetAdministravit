@@ -38,6 +38,25 @@ internal static class TestData
         Path.Combine(RepositoryRoot, "..", "DeconstructingTheSauce"),
     ];
 
+    /// <summary>
+    /// Where a test MIDI file might live. Relative to the repository so no local layout is baked in.
+    /// </summary>
+    private static readonly string[] MidiCandidates =
+    [
+        Path.Combine(RepositoryRoot, "canyon.mid"),
+        Path.Combine(RepositoryRoot, "..", "SauceForYourEars", "canyon.mid"),
+        @"C:\Windows\Media\town.mid",
+    ];
+
+    /// <summary>Skips the calling test unless a test MIDI file is available.</summary>
+    /// <returns>The file's path.</returns>
+    public static string RequireMidi()
+    {
+        var path = MidiCandidates.FirstOrDefault(File.Exists);
+        Skip.If(path is null, "No test MIDI file found.");
+        return path!;
+    }
+
     /// <summary>Path to the pinned <c>SCCore.dll</c>, or <see langword="null"/> if not present.</summary>
     public static string? SccorePath { get; } = Resolve("TABULASONORA_SCCORE", DllCandidates, File.Exists);
 

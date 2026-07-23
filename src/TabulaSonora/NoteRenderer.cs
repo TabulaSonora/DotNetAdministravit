@@ -36,6 +36,7 @@ public sealed class NoteRenderer
 
     private readonly PatchDirectory _directory;
     private readonly DrumKitTable _drums;
+    private readonly Interpolator _interpolator;
     private readonly Sampler _sampler;
     private readonly TvaChain _tva;
     private readonly TvfChain _tvf;
@@ -60,7 +61,8 @@ public sealed class NoteRenderer
         Tables = tables;
         _directory = new PatchDirectory(tables);
         _drums = new DrumKitTable(rom);
-        _sampler = new Sampler(new WaveRom(rom), new Interpolator(tables));
+        _interpolator = new Interpolator(tables);
+        _sampler = new Sampler(new WaveRom(rom), _interpolator);
         _tva = new TvaChain(tables, envelope);
         _tvf = new TvfChain(tables, envelope);
         _pitch = new PitchChain(tables, envelope);
@@ -76,6 +78,32 @@ public sealed class NoteRenderer
 
     /// <summary>The drum kits.</summary>
     public DrumKitTable Drums => _drums;
+
+    /// <summary>The 4-tap resampler.</summary>
+    /// <remarks>
+    /// The chains below are exposed so a host can assemble the voice itself — which is what the
+    /// real-time <see cref="Realtime.ToneGenerator"/> does, sharing one loaded set of tables and one
+    /// wave cache with this renderer rather than duplicating either.
+    /// </remarks>
+    public Interpolator Interpolator => _interpolator;
+
+    /// <summary>The wave decoder and player.</summary>
+    public Sampler Sampler => _sampler;
+
+    /// <summary>The amplitude chain.</summary>
+    public TvaChain Tva => _tva;
+
+    /// <summary>The filter chain.</summary>
+    public TvfChain Tvf => _tvf;
+
+    /// <summary>The pitch chain.</summary>
+    public PitchChain Pitch => _pitch;
+
+    /// <summary>The two LFO engines.</summary>
+    public LfoEngine Lfo => _lfo;
+
+    /// <summary>The pan law.</summary>
+    public PanLaw Pan => _pan;
 
     /// <summary>Renders one melodic note.</summary>
     /// <param name="program">Program number.</param>

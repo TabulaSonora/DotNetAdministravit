@@ -45,7 +45,8 @@ static void Usage()
               presets.json. This is the only setup step; run it once.
 
           render <SCCore.dll> <input.mid> <output.wav> [options]
-              Render a MIDI file. Run with no options for the list.
+              Render a MIDI file. --stream uses the real-time block loop instead of
+              rendering note by note. Run with no options for the full list.
 
           info <SCCore.dll>
               Print the build identity and the wave-ROM block map.
@@ -147,7 +148,7 @@ static int Render(ReadOnlySpan<string> args)
     if (args.Length < 3)
     {
         return Fail("render <SCCore.dll> <input.mid> <output.wav> [--map 1..4] [--tail SEC] " +
-                    "[--end SEC] [--no-reverb] [--no-chorus] [--no-delay] " +
+                    "[--end SEC] [--stream] [--no-reverb] [--no-chorus] [--no-delay] " +
                     "[--mute 1,2] [--solo 5,6]   (channels are 1-16)");
     }
 
@@ -156,10 +157,13 @@ static int Render(ReadOnlySpan<string> args)
     var outputPath = args[2];
 
     var options = new TabulaSonora.RenderOptions();
+    var stream = false;
+
     for (var i = 3; i < args.Length; i++)
     {
         switch (args[i])
         {
+            case "--stream": stream = true; break;
             case "--map":
                 options = options with { Map = (TabulaSonora.Patches.ToneMap)int.Parse(args[++i], CultureInfo.InvariantCulture) };
                 break;
@@ -188,8 +192,9 @@ static int Render(ReadOnlySpan<string> args)
     using var rom = RomImage.Open(dllPath, RomVerification.Quick);
     var started = Environment.TickCount64;
 
-    var renderer = TabulaSonora.SequenceRenderer.Create(rom);
-    var result = renderer.RenderFile(midiPath, options);
+    var result = stream
+        ? RenderStreaming(rom, midiPath, options)
+        : TabulaSonora.SequenceRenderer.Create(rom).RenderFile(midiPath, options);
 
     WriteWav(outputPath, result.Left, result.Right, result.SampleRate);
 
@@ -301,6 +306,36 @@ static int RenderNote(ReadOnlySpan<string> args)
 
     Console.WriteLine($"{voice.Name}: {voice.Left.Length} frames");
     return 0;
+}
+
+/// <summary>
+/// Renders through the real-time block loop rather than note by note.
+/// </summary>
+/// <remarks>
+/// Useful for A/B: the two paths share their DSP, so what this exposes is the difference the
+/// architecture makes — a 64-voice limit that actually steals, live controllers, and effect types that
+/// can change mid-song.
+/// </remarks>
+static TabulaSonora.RenderResult RenderStreaming(
+    RomImage rom, string midiPath, TabulaSonora.RenderOptions options)
+{
+    var generator = TabulaSonora.Realtime.ToneGenerator.Create(rom, new TabulaSonora.Realtime.ToneGeneratorOptions
+    {
+        Map = options.Map,
+        DrumChannel = options.DrumChannel,
+        Reverb = options.Reverb,
+        Chorus = options.Chorus,
+        Delay = options.Delay,
+        ReverbType = options.ReverbType,
+        ChorusType = options.ChorusType,
+        DelayType = options.DelayType,
+        DrumRingSeconds = options.DrumRingSeconds,
+        Channels = options.Channels,
+    });
+
+    return TabulaSonora.Realtime.SequencePlayer
+        .FromFile(generator, midiPath)
+        .RenderToEnd(options.TailSeconds, options.EndSeconds);
 }
 
 static void WriteWav(string path, float[] left, float[] right, int sampleRate)

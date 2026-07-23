@@ -66,11 +66,17 @@ A terminal transport: progress bar, peak meters, elapsed and total time, and the
 count. Space pauses, the arrow keys seek five seconds, `,` and `.` seek thirty, `Home` returns to the
 start, `q` quits.
 
+Playback starts immediately: the song is synthesised through the engine's block loop as it plays, at
+around seventy times realtime on one core, so there is nothing to wait for and a long file costs no
+more memory than a short one. `--prerender` renders the whole song first instead, which makes seeking
+exact and lets the meters look ahead rather than behind.
+
 Audio leaves through [OwnAudioSharp](https://github.com/modernmube/ownaudiosharp). The player takes
 every render option above, plus:
 
 | option | meaning |
 |---|---|
+| `--prerender` | render the whole song before playing instead of streaming it |
 | `--list-devices` | enumerate outputs and exit |
 | `--device NAME\|N` | pick an output by name fragment or index |
 | `--host NAME` | PortAudio host API — `WASAPI` (default on Windows), `MME`, `DirectSound`, `WDMKS`, `ASIO`, `None` |
@@ -79,18 +85,58 @@ every render option above, plus:
 | `--gain G` | linear gain on the way out |
 
 The default host is WASAPI rather than PortAudio's own Windows fallback, MME, which is too coarse for
-smooth playback. The default rate is the engine's own 32 kHz, so nothing resamples between the render
-and the device.
-
-> [!NOTE]
-> The song is rendered in full before playback starts, not synthesised under the audio callback,
-> because the engine renders offline — each note whole, summed at its start. At better than ten times
-> realtime the wait is short, and seeking becomes free and exact. A streaming path would need the
-> block-based voice loop the hardware uses, which this project does not implement.
+smooth playback. The default rate is the engine's own 32 kHz, so nothing resamples on the way to the
+device.
 
 If it stutters, raise `--latency`. The send loop is paced from managed code against the device's own
 frame counter, and a `Thread.Sleep(1)` on Windows routinely lasts 15 ms, so the lead has to cover the
 scheduler's worst nap rather than its average one.
+
+## Driving the engine live
+
+[`ToneGenerator`](xref:TabulaSonora.Realtime.ToneGenerator) is the engine itself: MIDI in, blocks out,
+nothing known in advance.
+
+```csharp
+using TabulaSonora.Realtime;
+using TabulaSonora.Rom;
+
+using var rom = RomImage.Open(dllPath);
+var engine = ToneGenerator.Create(rom);
+
+engine.SendChannel(0xC0, 48, 0);     // program change: strings
+engine.SendChannel(0x90, 60, 100);   // note on
+
+var left = new float[512];
+var right = new float[512];
+engine.Render(left, right);          // hold it for as long as you like
+
+engine.SendChannel(0x80, 60, 0);     // note off, whenever
+```
+
+Send events between `Render` calls and they land on the block boundary, which is the grid the engine
+itself applies them on. Polyphony is the hardware's own 64 voices; past that the allocator steals,
+taking whole notes rather than half of one and fading what it takes.
+
+To play a file rather than drive it by hand,
+[`SequencePlayer`](xref:TabulaSonora.Realtime.SequencePlayer) dispatches a parsed
+[`SmfReader`](xref:TabulaSonora.Midi.SmfReader) event list as it renders, and
+[`Seek`](xref:TabulaSonora.Realtime.SequencePlayer.Seek*) replays the file's controllers up to a
+position so that jumping into the middle sounds the way playing up to there would.
+
+```csharp
+var player = SequencePlayer.FromFile(engine, "song.mid");
+player.Seek(60 * ToneGenerator.SampleRate);
+player.Render(left, right);
+```
+
+> [!NOTE]
+> One thing genuinely differs from [`SequenceRenderer`](xref:TabulaSonora.SequenceRenderer). The
+> offline path latches a note's program, bank and pan by looking them up at the note's own position,
+> which picks up a program change written *after* the note-on at the same tick. A running engine
+> cannot: the note-on arrives first and plays whatever program was already selected — which is what
+> the module does. Some files, `canyon.mid` among them, put their program changes last at tick 0, so
+> the first few notes come out on a different patch here.
 
 ## From code
 

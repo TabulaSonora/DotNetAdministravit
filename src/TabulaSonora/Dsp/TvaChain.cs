@@ -173,6 +173,81 @@ public sealed class TvaChain
     }
 
     /// <summary>
+    /// Builds the amplitude envelope for one note, ready to be evaluated at any sample position.
+    /// </summary>
+    /// <param name="partial">The partial's parameter block.</param>
+    /// <param name="velocity">MIDI velocity.</param>
+    /// <param name="key">MIDI key.</param>
+    /// <param name="zoneLevel">The multisample's per-key-zone level.</param>
+    /// <param name="toneLevel">The tone header's master level.</param>
+    /// <param name="sampleRate">Internal sample rate.</param>
+    /// <param name="attackMilliseconds">
+    /// Optional attack softening. Zero is faithful — the engine's amplitude attack is instant.
+    /// </param>
+    /// <returns>The envelope, in the linear gain domain.</returns>
+    /// <remarks>
+    /// The envelope does not need to know when the note ends: call
+    /// <see cref="SegmentEnvelope.NoteOff"/> when it does. That is what lets the real-time voice loop
+    /// and the offline renderer share one implementation.
+    /// </remarks>
+    public SegmentEnvelope CreateEnvelope(
+        PartialParameters partial,
+        int velocity,
+        int key,
+        int zoneLevel = 127,
+        int toneLevel = 127,
+        int sampleRate = 32000,
+        double attackMilliseconds = 0.0)
+    {
+        var raw = partial.Raw;
+        var partialLevel = PartialLevel(partial, velocity) ?? velocity;
+        var baseLevel = BaseLevel(partial, partialLevel, key, zoneLevel, toneLevel);
+
+        // Segment targets in the gain domain. A stage whose attenuation exceeds the base is exact
+        // silence, not the amplitude table's floor -- the engine's gain word reads 0.000000 there.
+        var targets = new double[SegmentEnvelope.SegmentCount];
+        for (var i = 0; i < targets.Length; i++)
+        {
+            var level = baseLevel - _levelCurve[raw[0x5A + i]];
+            targets[i] = level <= 0 ? 0.0 : AmpScale * AmpOf(level);
+        }
+
+        var mainRate = Envelope.RateScale((_rateKeyFollow0[(raw[0x65] * 0x80) + key] - 0x80) & 0xFF, raw[0x67]);
+        var releaseRate = Envelope.RateScale((_rateKeyFollow0[(raw[0x66] * 0x80) + key] - 0x80) & 0xFF, raw[0x68]);
+
+        // Two velocity level-scales, not one: segments 0-1 use 0x69, segments 2-3 and the release
+        // use 0x6a. Sharing one makes the later segments descend far too steeply.
+        var velocityEarly = Envelope.LevelScale(partialLevel, raw[0x69]);
+        var velocityLate = Envelope.LevelScale(partialLevel, raw[0x6A]);
+
+        var segmentSamples = new double[SegmentEnvelope.SegmentCount];
+        var linear = new bool[SegmentEnvelope.SegmentCount];
+
+        for (var i = 0; i < segmentSamples.Length; i++)
+        {
+            var seconds = Envelope.SegmentMilliseconds(
+                raw[0x5E + i], mainRate, i < 2 ? velocityEarly : velocityLate) / 1000.0;
+
+            if (i == 0 && attackMilliseconds > 0)
+            {
+                seconds = Math.Max(seconds, attackMilliseconds / 1000.0);
+            }
+
+            segmentSamples[i] = seconds * sampleRate;
+            linear[i] = EnvelopeMachine.IsLinearSegment(raw[0x5E + i]);
+        }
+
+        var releaseMs = Envelope.SegmentMilliseconds(raw[0x62], releaseRate, velocityLate);
+
+        return new SegmentEnvelope(
+            Envelope, targets, segmentSamples, linear,
+            releaseTarget: 0.0,
+            releaseSamples: releaseMs / 1000.0 * sampleRate,
+            releaseLinear: EnvelopeMachine.IsLinearSegment(raw[0x62]),
+            afterRelease: 0.0);
+    }
+
+    /// <summary>
     /// Renders the amplitude envelope for one note.
     /// </summary>
     /// <param name="partial">The partial's parameter block.</param>
@@ -186,7 +261,7 @@ public sealed class TvaChain
     /// <param name="attackMilliseconds">
     /// Optional attack softening. Zero is faithful — the engine's amplitude attack is instant.
     /// </param>
-    /// <returns>Per-sample gain, or an empty array when the velocity window gates the partial off.</returns>
+    /// <returns>Per-sample gain, or an empty array when the note is not long enough to sound.</returns>
     /// <remarks>
     /// The gain is deliberately left smooth per sample rather than stepped per control tick. A
     /// stepwise model looks more faithful to a control-rate gain word, but it measures worse against
@@ -204,99 +279,21 @@ public sealed class TvaChain
         int sampleRate = 32000,
         double attackMilliseconds = 0.0)
     {
-        var raw = partial.Raw;
         var sampleCount = (int)((holdSeconds + tailSeconds) * sampleRate);
         if (sampleCount <= 0)
         {
             return [];
         }
 
-        var partialLevel = PartialLevel(partial, velocity) ?? velocity;
-        var baseLevel = BaseLevel(partial, partialLevel, key, zoneLevel, toneLevel);
+        var envelope = CreateEnvelope(
+            partial, velocity, key, zoneLevel, toneLevel, sampleRate, attackMilliseconds);
 
-        // Segment targets in the gain domain. A stage whose attenuation exceeds the base is exact
-        // silence, not the amplitude table's floor -- the engine's gain word reads 0.000000 there.
-        var targets = new double[4];
-        for (var i = 0; i < 4; i++)
-        {
-            var level = baseLevel - _levelCurve[raw[0x5A + i]];
-            targets[i] = level <= 0 ? 0.0 : AmpScale * AmpOf(level);
-        }
-
-        var mainRate = Envelope.RateScale((_rateKeyFollow0[(raw[0x65] * 0x80) + key] - 0x80) & 0xFF, raw[0x67]);
-        var releaseRate = Envelope.RateScale((_rateKeyFollow0[(raw[0x66] * 0x80) + key] - 0x80) & 0xFF, raw[0x68]);
-
-        // Two velocity level-scales, not one: segments 0-1 use 0x69, segments 2-3 and the release
-        // use 0x6a. Sharing one makes the later segments descend far too steeply.
-        var velocityEarly = Envelope.LevelScale(partialLevel, raw[0x69]);
-        var velocityLate = Envelope.LevelScale(partialLevel, raw[0x6A]);
-
-        var segmentMs = new double[4];
-        for (var i = 0; i < 4; i++)
-        {
-            segmentMs[i] = Envelope.SegmentMilliseconds(
-                raw[0x5E + i], mainRate, i < 2 ? velocityEarly : velocityLate);
-        }
-
-        var releaseMs = Envelope.SegmentMilliseconds(raw[0x62], releaseRate, velocityLate);
+        envelope.NoteOff(Math.Min((int)(holdSeconds * sampleRate), sampleCount));
 
         var gain = new float[sampleCount];
-        var noteOff = Math.Min((int)(holdSeconds * sampleRate), sampleCount);
-        var time = 0.0;
-        var previous = 0.0;
-
-        for (var i = 0; i < 4; i++)
+        for (var n = 0; n < sampleCount; n++)
         {
-            var seconds = segmentMs[i] / 1000.0;
-            if (i == 0 && attackMilliseconds > 0)
-            {
-                seconds = Math.Max(seconds, attackMilliseconds / 1000.0);
-            }
-
-            var from = (int)(time * sampleRate);
-            var to = Math.Min((int)((time + seconds) * sampleRate), sampleCount);
-            if (to > from && seconds > 0)
-            {
-                var linear = EnvelopeMachine.IsLinearSegment(raw[0x5E + i]);
-                var span = seconds * sampleRate;
-                for (var n = from; n < to; n++)
-                {
-                    gain[n] = (float)Envelope.SegmentCurve((n - from) / span, previous, targets[i], linear);
-                }
-            }
-
-            previous = targets[i];
-            time += seconds;
-            if (time >= holdSeconds)
-            {
-                break;
-            }
-        }
-
-        // Segments finished before note-off: hold the last target.
-        var sustainFrom = (int)(time * sampleRate);
-        for (var n = sustainFrom; n < noteOff; n++)
-        {
-            gain[n] = (float)previous;
-        }
-
-        var atNoteOff = noteOff > 0 ? gain[noteOff - 1] : previous;
-        var releaseSamples = Math.Min(sampleCount - noteOff, Math.Max(1, (int)(releaseMs / 1000.0 * sampleRate)));
-
-        if (releaseSamples > 0)
-        {
-            var linear = EnvelopeMachine.IsLinearSegment(raw[0x62]);
-            var span = releaseMs / 1000.0 * sampleRate;
-            for (var n = 0; n < releaseSamples && noteOff + n < sampleCount; n++)
-            {
-                var position = releaseMs > 0 ? n / span : 1.0;
-                gain[noteOff + n] = (float)Envelope.SegmentCurve(position, atNoteOff, 0.0, linear);
-            }
-        }
-
-        for (var n = noteOff + releaseSamples; n < sampleCount; n++)
-        {
-            gain[n] = 0f;
+            gain[n] = (float)envelope.ValueAt(n);
         }
 
         return gain;

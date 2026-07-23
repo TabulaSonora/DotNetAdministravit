@@ -277,35 +277,28 @@ public sealed class TvfChain
     }
 
     /// <summary>
-    /// The 15-bit cutoff trajectory over a note.
+    /// Builds the cutoff envelope for one note, ready to be evaluated at any sample position.
     /// </summary>
     /// <param name="partial">The partial's parameter block.</param>
     /// <param name="velocity">MIDI velocity.</param>
     /// <param name="key">MIDI key.</param>
-    /// <param name="holdSeconds">Time from note-on to note-off.</param>
-    /// <param name="tailSeconds">Time to render past note-off.</param>
     /// <param name="sampleRate">Internal sample rate.</param>
-    /// <returns>Per-sample cutoff sums, clamped to 15 bits.</returns>
+    /// <returns>
+    /// The envelope, which yields an <em>offset</em> from the peak, and the base cutoff that offset
+    /// is added to before the sum is clamped to 15 bits.
+    /// </returns>
     /// <remarks>
     /// The running level starts at zero rather than at the release level: all five targets are made
     /// relative to the peak, and the peak itself is folded into the base cutoff instead. TVF segments
     /// are always linear — unlike the TVA, the shape is not data-driven here.
     /// </remarks>
-    public double[] Envelope(
+    public (SegmentEnvelope Offsets, int BaseCutoff) CreateEnvelope(
         PartialParameters partial,
         int velocity,
         int key,
-        double holdSeconds,
-        double tailSeconds,
         int sampleRate = 32000)
     {
         var raw = partial.Raw;
-        var sampleCount = (int)((holdSeconds + tailSeconds) * sampleRate);
-        if (sampleCount <= 0)
-        {
-            return [];
-        }
-
         var (peak, segments, release) = EnvelopeOffsets(partial, key, velocity);
 
         var mainRate = _envelope.RateScale(
@@ -317,11 +310,21 @@ public sealed class TvfChain
         var velocityEarly = _envelope.LevelScale(velocity, raw[0x4B]);
         var velocityLate = _envelope.LevelScale(velocity, raw[0x4C]);
 
-        var segmentMs = new double[4];
-        for (var i = 0; i < 4; i++)
+        var targets = new double[SegmentEnvelope.SegmentCount];
+        var segmentSamples = new double[SegmentEnvelope.SegmentCount];
+        var linear = new bool[SegmentEnvelope.SegmentCount];
+
+        for (var i = 0; i < targets.Length; i++)
         {
-            segmentMs[i] = _envelope.SegmentMilliseconds(
+            var milliseconds = _envelope.SegmentMilliseconds(
                 raw[0x3F + i], mainRate, i < 2 ? velocityEarly : velocityLate);
+
+            targets[i] = segments[i];
+
+            // Every TVF segment occupies at least 2 ms, so an instant one still slews rather than
+            // stepping the coefficients.
+            segmentSamples[i] = Math.Max(milliseconds / 1000.0, 0.002) * sampleRate;
+            linear[i] = true;
         }
 
         // The release has its own rate row and modifier -- 0x47/0x49, not the main 0x46/0x48.
@@ -329,59 +332,48 @@ public sealed class TvfChain
             (_rateKeyFollow[(raw[0x47] * 0x80) + (key & 0x7F)] - 0x80) & 0xFF, raw[0x49]);
         var releaseMs = _envelope.SegmentMilliseconds(raw[0x43], releaseRate, velocityLate);
 
-        var offsets = new double[sampleCount];
-        var noteOff = Math.Min((int)(holdSeconds * sampleRate), sampleCount);
-        var time = 0.0;
-        var previous = 0.0;
-
-        for (var i = 0; i < 4; i++)
-        {
-            var seconds = Math.Max(segmentMs[i] / 1000.0, 0.002);
-            var from = (int)(time * sampleRate);
-            var to = Math.Min((int)((time + seconds) * sampleRate), sampleCount);
-            if (to > from)
-            {
-                var span = seconds * sampleRate;
-                for (var n = from; n < to; n++)
-                {
-                    offsets[n] = _envelope.SegmentCurve((n - from) / span, previous, segments[i], linear: true);
-                }
-            }
-
-            previous = segments[i];
-            time += seconds;
-            if (time >= holdSeconds)
-            {
-                break;
-            }
-        }
-
-        for (var n = (int)(time * sampleRate); n < noteOff; n++)
-        {
-            offsets[n] = previous;
-        }
-
-        var atNoteOff = noteOff > 0 ? offsets[noteOff - 1] : previous;
-        var releaseSamples = Math.Min(sampleCount - noteOff, Math.Max(1, (int)(releaseMs / 1000.0 * sampleRate)));
-        if (releaseSamples > 0)
-        {
-            var span = Math.Max(releaseMs / 1000.0 * sampleRate, 1e-9);
-            for (var n = 0; n < releaseSamples && noteOff + n < sampleCount; n++)
-            {
-                offsets[noteOff + n] = _envelope.SegmentCurve(n / span, atNoteOff, release, linear: true);
-            }
-        }
-
-        for (var n = noteOff + releaseSamples; n < sampleCount; n++)
-        {
-            offsets[n] = release;
-        }
+        var envelope = new SegmentEnvelope(
+            _envelope, targets, segmentSamples, linear,
+            releaseTarget: release,
+            releaseSamples: Math.Max(releaseMs / 1000.0 * sampleRate, 1e-9),
+            releaseLinear: true,
+            afterRelease: release);
 
         // Stage B: the part-level cutoff terms cancel at neutral, so only the base and envelope remain.
-        var baseCutoff = Math.Min(0x7FFF, (raw[0x2F] * 0x100) + peak);
+        return (envelope, Math.Min(0x7FFF, (raw[0x2F] * 0x100) + peak));
+    }
+
+    /// <summary>
+    /// The 15-bit cutoff trajectory over a note.
+    /// </summary>
+    /// <param name="partial">The partial's parameter block.</param>
+    /// <param name="velocity">MIDI velocity.</param>
+    /// <param name="key">MIDI key.</param>
+    /// <param name="holdSeconds">Time from note-on to note-off.</param>
+    /// <param name="tailSeconds">Time to render past note-off.</param>
+    /// <param name="sampleRate">Internal sample rate.</param>
+    /// <returns>Per-sample cutoff sums, clamped to 15 bits.</returns>
+    public double[] Envelope(
+        PartialParameters partial,
+        int velocity,
+        int key,
+        double holdSeconds,
+        double tailSeconds,
+        int sampleRate = 32000)
+    {
+        var sampleCount = (int)((holdSeconds + tailSeconds) * sampleRate);
+        if (sampleCount <= 0)
+        {
+            return [];
+        }
+
+        var (envelope, baseCutoff) = CreateEnvelope(partial, velocity, key, sampleRate);
+        envelope.NoteOff(Math.Min((int)(holdSeconds * sampleRate), sampleCount));
+
+        var offsets = new double[sampleCount];
         for (var n = 0; n < sampleCount; n++)
         {
-            offsets[n] = Math.Clamp(baseCutoff + offsets[n], 0, 0x7FFF);
+            offsets[n] = Math.Clamp(baseCutoff + envelope.ValueAt(n), 0, 0x7FFF);
         }
 
         return offsets;

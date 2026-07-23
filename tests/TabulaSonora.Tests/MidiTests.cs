@@ -13,16 +13,6 @@ namespace TabulaSonora.Tests;
 /// </remarks>
 public class MidiTests
 {
-    /// <summary>
-    /// Where the test MIDI file might live. Relative to the repository so no local layout is baked in.
-    /// </summary>
-    private static readonly string[] MidiCandidates =
-    [
-        Path.Combine(TestData.RepositoryRoot, "canyon.mid"),
-        Path.Combine(TestData.RepositoryRoot, "..", "SauceForYourEars", "canyon.mid"),
-        @"C:\Windows\Media\town.mid",
-    ];
-
     private static JsonElement LoadFixture()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "smf_canyon.json");
@@ -33,12 +23,7 @@ public class MidiTests
         return document.RootElement.Clone();
     }
 
-    private static string RequireMidi()
-    {
-        var path = MidiCandidates.FirstOrDefault(File.Exists);
-        Skip.If(path is null, "canyon.mid not found.");
-        return path!;
-    }
+    private static string RequireMidi() => TestData.RequireMidi();
 
     [SkippableFact]
     public void ParsesEveryEventExactlyAsTheReferenceDoes()

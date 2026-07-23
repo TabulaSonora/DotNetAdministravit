@@ -5,16 +5,12 @@ namespace TabulaSonora.Player;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The engine renders offline — each note whole, summed at its start — so playback streams from a
-/// finished buffer rather than synthesising under the audio callback. That makes seeking free and
-/// exact, and it is why the render happens up front.
-/// </para>
-/// <para>
-/// A true real-time path would need the block-based voice loop the original hardware uses, which
-/// this project does not implement.
+/// The whole song is rendered before playback starts, which makes seeking free and exact and lets the
+/// peak meters look at material that already exists. <see cref="StreamingSource"/> is the alternative,
+/// and the usual one: it synthesises through the block loop as it plays.
 /// </para>
 /// </remarks>
-public sealed class PlaybackBuffer
+public sealed class PlaybackBuffer : IPlaybackSource
 {
     private readonly float[] _left;
     private readonly float[] _right;

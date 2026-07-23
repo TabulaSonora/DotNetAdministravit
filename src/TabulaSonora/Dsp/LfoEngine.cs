@@ -213,6 +213,21 @@ public sealed class LfoEngine
         return (lfo1, lfo2);
     }
 
+    /// <summary>Creates a runner that steps one LFO a control tick at a time.</summary>
+    /// <param name="config">The LFO's configuration.</param>
+    /// <returns>The runner.</returns>
+    public LfoRunner CreateRunner(LfoConfig config) => new(this, config);
+
+    /// <summary>Creates runners for both of a partial's LFOs.</summary>
+    /// <param name="toneNumber">Tone number.</param>
+    /// <param name="partial">The partial's parameter block.</param>
+    /// <returns>The tone-common LFO1 and the per-partial LFO2.</returns>
+    public (LfoRunner Lfo1, LfoRunner Lfo2) CreateRunners(int toneNumber, PartialParameters partial)
+    {
+        var (lfo1, lfo2) = Configure(toneNumber, partial);
+        return (CreateRunner(lfo1), CreateRunner(lfo2));
+    }
+
     /// <summary>Runs one LFO for a number of control ticks.</summary>
     /// <param name="config">The LFO's configuration.</param>
     /// <param name="tickCount">How many 100 Hz control ticks to produce.</param>
@@ -221,54 +236,12 @@ public sealed class LfoEngine
     public double[] Run(LfoConfig config, int tickCount, LfoDestination destination)
     {
         var output = new double[Math.Max(0, tickCount)];
-
-        var depth = config.Depth(destination);
-        if (depth == 0 || config.Increment == 0)
-        {
-            return output;
-        }
-
-        var (clamp, rounding) = DestinationLimits(destination);
-        depth = Math.Clamp(depth, -clamp, clamp);
-
-        var phase = config.InitialPhase & 0xFFFF;
-        var delayAccumulator = 0;
-        var fadeAccumulator = 0;
+        var runner = CreateRunner(config);
 
         for (var i = 0; i < output.Length; i++)
         {
-            phase = (phase + config.Increment) & 0xFFFF;
-
-            if (delayAccumulator < 0xFFFF)
-            {
-                // The LFO runs during the delay but is not applied. A zero rate never completes,
-                // which is how a patch switches an LFO off entirely.
-                if (config.DelayRate == 0)
-                {
-                    continue;
-                }
-
-                delayAccumulator = Math.Min(0xFFFF, delayAccumulator + config.DelayRate);
-                if (delayAccumulator < 0xFFFF)
-                {
-                    continue;
-                }
-            }
-
-            if (fadeAccumulator < 0xFFFF)
-            {
-                fadeAccumulator = Math.Min(0xFFFF, fadeAccumulator + config.FadeRate);
-            }
-
-            var effective = fadeAccumulator == 0xFFFF
-                ? depth
-                : ((Math.Abs(depth) * fadeAccumulator) >> 16) * (depth >= 0 ? 1 : -1);
-
-            var wave = Waveform(phase, config.Waveform);
-
-            // Sign-magnitude fixed-point multiply: magnitudes multiply, signs compose separately.
-            var magnitude = ((Math.Abs(wave) * Math.Abs(effective) * 2) + rounding) >> 16;
-            output[i] = (wave >= 0) == (effective >= 0) ? magnitude : -magnitude;
+            runner.Tick();
+            output[i] = runner.Value(destination);
         }
 
         return output;
@@ -345,53 +318,13 @@ public sealed class LfoEngine
     private double[] RunPitchWithWheel(LfoConfig config, int tickCount, double[] modDepthPerTick)
     {
         var output = new double[Math.Max(0, tickCount)];
-        if (config.Increment == 0)
-        {
-            return output;
-        }
-
-        var (clamp, rounding) = DestinationLimits(LfoDestination.Pitch);
-        var toneDepth = Math.Clamp(config.PitchDepth, -clamp, clamp);
-
-        var phase = config.InitialPhase & 0xFFFF;
-        var delayAccumulator = 0;
-        var fadeAccumulator = 0;
+        var runner = CreateRunner(config);
         var last = modDepthPerTick.Length - 1;
 
         for (var i = 0; i < output.Length; i++)
         {
-            phase = (phase + config.Increment) & 0xFFFF;
-
-            if (delayAccumulator < 0xFFFF)
-            {
-                if (config.DelayRate == 0)
-                {
-                    continue;
-                }
-
-                delayAccumulator = Math.Min(0xFFFF, delayAccumulator + config.DelayRate);
-                if (delayAccumulator < 0xFFFF)
-                {
-                    continue;
-                }
-            }
-
-            if (fadeAccumulator < 0xFFFF)
-            {
-                fadeAccumulator = Math.Min(0xFFFF, fadeAccumulator + config.FadeRate);
-            }
-
-            var faded = fadeAccumulator == 0xFFFF
-                ? toneDepth
-                : ((Math.Abs(toneDepth) * fadeAccumulator) >> 16) * (toneDepth >= 0 ? 1 : -1);
-
-            // The wheel is summed with the tone's own depth after the fade, then clamped.
-            var effective = faded + (int)(last < 0 ? 0 : modDepthPerTick[Math.Min(i, last)]);
-            effective = Math.Clamp(effective, -clamp, clamp);
-
-            var wave = Waveform(phase, config.Waveform);
-            var magnitude = ((Math.Abs(wave) * Math.Abs(effective) * 2) + rounding) >> 16;
-            output[i] = (wave >= 0) == (effective >= 0) ? magnitude : -magnitude;
+            runner.Tick();
+            output[i] = runner.PitchValue(last < 0 ? 0 : modDepthPerTick[Math.Min(i, last)]);
         }
 
         return output;
@@ -423,4 +356,128 @@ public sealed class LfoEngine
 
     private static int ReadInt16(ReadOnlySpan<byte> source, int offset) =>
         (short)(source[offset] | (source[offset + 1] << 8));
+}
+
+/// <summary>
+/// One LFO's running state: phase, delay and fade-in accumulators, stepped a control tick at a time.
+/// </summary>
+/// <remarks>
+/// <para>
+/// All three destinations share one runner. The accumulators do not depend on which depth is being
+/// applied, so stepping once and reading three values is the same trajectory as running the LFO three
+/// times — and it is what the engine does, since a partial has one LFO object, not one per
+/// destination.
+/// </para>
+/// <para>
+/// <see cref="Tick"/> advances; the value is read afterwards, so the first tick already carries a
+/// phase increment.
+/// </para>
+/// </remarks>
+public sealed class LfoRunner
+{
+    private readonly LfoEngine _engine;
+    private readonly LfoConfig _config;
+
+    private int _phase;
+    private int _delay;
+    private int _fade;
+    private bool _applied;
+
+    internal LfoRunner(LfoEngine engine, LfoConfig config)
+    {
+        _engine = engine;
+        _config = config;
+        _phase = config.InitialPhase & 0xFFFF;
+    }
+
+    /// <summary>The configuration this runner steps.</summary>
+    public LfoConfig Config => _config;
+
+    /// <summary>Whether the delay has elapsed, so the LFO is being applied.</summary>
+    public bool IsApplied => _applied;
+
+    /// <summary>Advances one control tick.</summary>
+    public void Tick()
+    {
+        _applied = false;
+        if (_config.Increment == 0)
+        {
+            return;
+        }
+
+        _phase = (_phase + _config.Increment) & 0xFFFF;
+
+        if (_delay < 0xFFFF)
+        {
+            // The LFO runs during the delay but is not applied. A zero rate never completes, which is
+            // how a patch switches an LFO off entirely.
+            if (_config.DelayRate == 0)
+            {
+                return;
+            }
+
+            _delay = Math.Min(0xFFFF, _delay + _config.DelayRate);
+            if (_delay < 0xFFFF)
+            {
+                return;
+            }
+        }
+
+        if (_fade < 0xFFFF)
+        {
+            _fade = Math.Min(0xFFFF, _fade + _config.FadeRate);
+        }
+
+        _applied = true;
+    }
+
+    /// <summary>The modulation for one destination, after the last tick.</summary>
+    /// <param name="destination">Which destination's depth to apply.</param>
+    /// <returns>The modulation.</returns>
+    public double Value(LfoDestination destination)
+    {
+        var (clamp, rounding) = LfoEngine.DestinationLimits(destination);
+        var depth = Math.Clamp(_config.Depth(destination), -clamp, clamp);
+        if (depth == 0)
+        {
+            return 0.0;
+        }
+
+        return Apply(Faded(depth), rounding);
+    }
+
+    /// <summary>
+    /// The pitch modulation with a mod-wheel depth folded in.
+    /// </summary>
+    /// <param name="wheelDepth">The wheel's contribution in milli-semitones.</param>
+    /// <returns>The modulation.</returns>
+    /// <remarks>
+    /// The wheel is summed with the tone's own depth <em>after</em> the fade-in, and the total is then
+    /// clamped to ±6000 — six semitones, the GS full-scale figure.
+    /// </remarks>
+    public double PitchValue(double wheelDepth)
+    {
+        var (clamp, rounding) = LfoEngine.DestinationLimits(LfoDestination.Pitch);
+        var depth = Math.Clamp(_config.PitchDepth, -clamp, clamp);
+        var effective = Math.Clamp(Faded(depth) + (int)wheelDepth, -clamp, clamp);
+        return Apply(effective, rounding);
+    }
+
+    private int Faded(int depth) => _fade == 0xFFFF
+        ? depth
+        : ((Math.Abs(depth) * _fade) >> 16) * (depth >= 0 ? 1 : -1);
+
+    private double Apply(int effective, int rounding)
+    {
+        if (!_applied)
+        {
+            return 0.0;
+        }
+
+        var wave = _engine.Waveform(_phase, _config.Waveform);
+
+        // Sign-magnitude fixed-point multiply: magnitudes multiply, signs compose separately.
+        var magnitude = ((Math.Abs(wave) * Math.Abs(effective) * 2) + rounding) >> 16;
+        return (wave >= 0) == (effective >= 0) ? magnitude : -magnitude;
+    }
 }

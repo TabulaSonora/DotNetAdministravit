@@ -59,6 +59,31 @@ public sealed class Interpolator
              + (_coefficients[c + 3] * buffer[index + 2]);
     }
 
+    /// <summary>
+    /// Reads one sample from a power-of-two ring buffer at an absolute index.
+    /// </summary>
+    /// <param name="ring">Source ring; its length must be a power of two.</param>
+    /// <param name="index">Absolute index of the sample, wrapped into the ring.</param>
+    /// <param name="fraction">Fractional part of the read position, 0 to 1.</param>
+    /// <returns>The interpolated sample.</returns>
+    /// <remarks>
+    /// For a stream that is generated as it is read rather than held whole — a ping-pong traversal,
+    /// whose predictor keeps accumulating in both directions and so never repeats. The window still
+    /// reaches from <c>i−1</c> to <c>i+2</c>, so the caller must have generated two samples ahead.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public float SampleRing(ReadOnlySpan<float> ring, long index, double fraction)
+    {
+        var mask = ring.Length - 1;
+        var phase = Math.Clamp((int)(fraction * PhaseCount), 0, PhaseCount - 1);
+        var c = phase * TapCount;
+
+        return (_coefficients[c] * ring[(int)((index - 1) & mask)])
+             + (_coefficients[c + 1] * ring[(int)(index & mask)])
+             + (_coefficients[c + 2] * ring[(int)((index + 1) & mask)])
+             + (_coefficients[c + 3] * ring[(int)((index + 2) & mask)]);
+    }
+
     /// <summary>Resamples a buffer at a series of fractional positions.</summary>
     /// <param name="buffer">Source samples.</param>
     /// <param name="positions">Read positions, one per output sample.</param>
