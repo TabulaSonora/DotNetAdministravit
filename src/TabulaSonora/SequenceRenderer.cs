@@ -46,6 +46,15 @@ public sealed record RenderOptions
     public double? EndSeconds { get; init; }
 
     /// <summary>
+    /// Receives rendering progress from 0 to 1. Optional.
+    /// </summary>
+    /// <remarks>
+    /// Reported per note, so it advances smoothly but not perfectly linearly in time — a long
+    /// sustained note takes longer than a short one.
+    /// </remarks>
+    public IProgress<double>? Progress { get; init; }
+
+    /// <summary>
     /// Per-channel mute and solo. Omit to hear everything.
     /// </summary>
     /// <remarks>
@@ -204,6 +213,8 @@ public sealed class SequenceRenderer
             }
 
             rendered++;
+            options.Progress?.Report((index + 1) / (double)sequence.Notes.Count);
+
             var count = Math.Min(voice.Left.Length, total - (int)note.On);
 
             for (var i = 0; i < count; i++)

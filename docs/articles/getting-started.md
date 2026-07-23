@@ -55,6 +55,43 @@ dotnet run -c Release --project src/TabulaSonora.Tools -- \
 | `--tail SEC`, `--end SEC` | release tail, and truncation |
 | `--no-reverb`, `--no-chorus`, `--no-delay` | effects are on by default, as the module has them |
 
+## Play a file
+
+```
+dotnet run -c Release --project src/TabulaSonora.Player -- \
+    "<path>/SCCore.dll" song.mid --map 1
+```
+
+A terminal transport: progress bar, peak meters, elapsed and total time, and the live underrun
+count. Space pauses, the arrow keys seek five seconds, `,` and `.` seek thirty, `Home` returns to the
+start, `q` quits.
+
+Audio leaves through [OwnAudioSharp](https://github.com/modernmube/ownaudiosharp). The player takes
+every render option above, plus:
+
+| option | meaning |
+|---|---|
+| `--list-devices` | enumerate outputs and exit |
+| `--device NAME\|N` | pick an output by name fragment or index |
+| `--host NAME` | PortAudio host API — `WASAPI` (default on Windows), `MME`, `DirectSound`, `WDMKS`, `ASIO`, `None` |
+| `--latency MS` | how far ahead of the device to run; default 150 |
+| `--rate HZ`, `--buffer FRAMES` | device rate and block size; default 32000 and 512 |
+| `--gain G` | linear gain on the way out |
+
+The default host is WASAPI rather than PortAudio's own Windows fallback, MME, which is too coarse for
+smooth playback. The default rate is the engine's own 32 kHz, so nothing resamples between the render
+and the device.
+
+> [!NOTE]
+> The song is rendered in full before playback starts, not synthesised under the audio callback,
+> because the engine renders offline — each note whole, summed at its start. At better than ten times
+> realtime the wait is short, and seeking becomes free and exact. A streaming path would need the
+> block-based voice loop the hardware uses, which this project does not implement.
+
+If it stutters, raise `--latency`. The send loop is paced from managed code against the device's own
+frame counter, and a `Thread.Sleep(1)` on Windows routinely lasts 15 ms, so the lead has to cover the
+scheduler's worst nap rather than its average one.
+
 ## From code
 
 ```csharp

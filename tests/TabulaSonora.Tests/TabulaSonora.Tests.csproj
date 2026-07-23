@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\TabulaSonora\TabulaSonora.csproj" />
+    <ProjectReference Include="..\..\src\TabulaSonora.Player\TabulaSonora.Player.csproj" />
   </ItemGroup>
 
   <!--

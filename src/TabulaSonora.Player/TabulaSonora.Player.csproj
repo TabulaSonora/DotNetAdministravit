@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\TabulaSonora\TabulaSonora.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OwnAudioSharp" Version="3.1.7" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>tabula-sonora-play</AssemblyName>
+    <RootNamespace>TabulaSonora.Player</RootNamespace>
+  </PropertyGroup>
+
+</Project>

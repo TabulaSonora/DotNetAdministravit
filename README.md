@@ -65,6 +65,30 @@ The output does not depend on the machine: a `presets.json` produced on any Wind
 everywhere. On macOS or Linux, run `prepare` once on Windows and copy that one 28 KB file across.
 Everything else `prepare` does works on any platform.
 
+### Playing
+
+```
+dotnet run -c Release --project src/TabulaSonora.Player -- \
+    "<path>/SCCore.dll" song.mid --map 1
+```
+
+A terminal player with a progress bar, peak meters, pause, and seeking. `--list-devices` enumerates
+outputs; `--device` picks one by name or index.
+
+Audio goes out through [OwnAudioSharp](https://github.com/modernmube/ownaudiosharp). By default it
+opens **WASAPI at 32 kHz** — the engine's own rate, so nothing resamples on the way to the device.
+PortAudio's fallback host on Windows is MME, which is far too coarse for smooth playback, hence the
+explicit default; override with `--host`.
+
+The song is rendered before playback rather than synthesised under the audio callback, because the
+engine renders offline. At better than ten times realtime the wait is short, and it makes seeking
+free and exact. A true streaming path would need the block-based voice loop the hardware uses, which
+this project does not implement.
+
+If it stutters, raise `--latency` (default 150 ms). The send loop is paced from managed code against
+the device's own frame counter, and a `Thread.Sleep(1)` on Windows routinely lasts 15 ms, so the lead
+has to cover the scheduler's worst nap rather than its average one.
+
 ### Render options
 
 `--map 1..4` selects the vintage — SC-55, SC-88, SC-88Pro, SC-8820. The same program resolves to
@@ -97,6 +121,7 @@ clone with no DLL present. Pushing to `main` publishes the site via GitHub Actio
 |---|---|
 | `src/TabulaSonora` | the library — `Rom`, `Patches`, `Dsp`, `Voices`, `Effects`, `Midi` |
 | `src/TabulaSonora.Tools` | CLI: `prepare`, `render`, `extract-tables`, `info` |
+| `src/TabulaSonora.Player` | terminal MIDI player, audio out via OwnAudioSharp |
 | `tests/TabulaSonora.Tests` | conformance and differential tests |
 | `docs/` | DocFX sources; `docs/_site` and `docs/api` are generated |
 | `tools/*.py` | fixture generators — see below |

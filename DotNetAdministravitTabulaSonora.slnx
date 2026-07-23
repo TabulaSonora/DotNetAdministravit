@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/TabulaSonora.Player/TabulaSonora.Player.csproj" />
     <Project Path="src/TabulaSonora.Tools/TabulaSonora.Tools.csproj" />
     <Project Path="src/TabulaSonora/TabulaSonora.csproj" />
   </Folder>
