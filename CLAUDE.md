@@ -116,6 +116,23 @@ off** — that is load-bearing, not an optimisation. `int` is the universal inte
 truncations are explicit, and three sites widen to `long` where a product exceeds 32 bits (amplitude
 curve, part volume, filter exponential decode). A fourth was found by ear, not inspection.
 
+## You cannot hear this engine
+
+The goal is **audible fidelity, not bit accuracy** (README has the reasoning). You can measure the
+output; you cannot listen to it. Two consequences, both of which have already cost real time here:
+
+- **A bad-looking number is a lead, not a defect.** Before chasing a residual, check whether it is
+  audible at all — widen the smoothing window, compare spectra by band, look at absolute level. One
+  passage sits at 0.72 envelope correlation with a spectrum matching the DLL within 0.5 dB; nothing
+  is wrong with it.
+- **Green metrics do not mean it sounds right.** A filter bug survived a full sweep of passing release
+  measurements and a render matching the reference to 0.03%. It was found because a person said it
+  still sounded wrong.
+
+So when the work is about how something *sounds*, render an audio file, say where in it to listen and
+what to listen for, and ask. `renders/` is gitignored and is the place to put clips. Report what you
+measured and what remains unverified rather than implying the two are the same.
+
 ## Verification, and what to do when oracles disagree
 
 Two independent oracles: the Python reference (differentially, over whole input domains) and the real

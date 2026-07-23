@@ -9,7 +9,9 @@ MIDI file in, audio out, at roughly 15× realtime on one core.
 ## What is and is not in this repository
 
 Everything here is original work: the C# is written from the reverse-engineering notes, not
-transcribed from decompiler output.
+transcribed from decompiler output. It was written by an AI, and the target is audible fidelity
+rather than bit accuracy — both are worth knowing before you rely on it, and both are set out in
+[what "faithful" means here](#what-faithful-means-here-and-who-wrote-it).
 
 **Nothing Roland-derived is committed or shipped.** The library assembly embeds exactly one data
 file, `Rom/manifest.json` — the offset *map*, not the data, which the upstream spec repo tracks for
@@ -185,6 +187,46 @@ Highlights, all asserted in the test suite or measured directly:
 Where the reference and the hardware disagree, this engine follows the hardware. One case is
 documented in the tests: the reference stops decoding one sample short of a loop's end, which dulls
 short single-cycle loops audibly.
+
+## What "faithful" means here, and who wrote it
+
+**The target is audible fidelity, not bit accuracy.** Some layers are bit-exact and are held to it —
+the static tables, the sample codec, the pitch and LFO tick streams. The rendered output is not, and
+is not trying to be. Three reasons, all of them deliberate:
+
+- **Where the reference implementation and the hardware disagree, this engine follows the hardware.**
+  There are several such places, each documented in the test that tolerates it. Matching the
+  reference there would mean sounding *less* like a Sound Canvas.
+- **Some of the remaining difference is inaudible and chasing it is wasted effort.** The engine is
+  float DSP; in a dense passage the few-millisecond amplitude structure is dominated by beating
+  between simultaneous notes, which is chaotically sensitive to differences far below hearing. One
+  passage here correlates at 0.72 on a 4 ms envelope while its spectrum matches the DLL within 0.5 dB
+  in every band.
+- **A few behaviours were never traced** — voice stealing most of all. See the known limits in
+  [the verification article](docs/articles/verification.md).
+
+So the tests assert correlation, level and spectrum with stated tolerances, and the tolerances have
+reasons written next to them. A number that looks bad is a lead, not a verdict.
+
+### The code was written by an AI, and the AI has no ears
+
+The C# here was written by Claude, from the reverse-engineering notes and from measurements taken
+against the DLL. That is worth knowing for a specific reason: **an AI can measure this engine but
+cannot hear it.** Every statement in this README about how something *sounds* came from a human
+listening to it.
+
+This is not a formality. Two of the bugs fixed here were found precisely at that boundary:
+
+- A filter defect survived a full sweep of green release metrics and a render matching the reference
+  to 0.03%. What surfaced it was a person saying *it still sounds wrong* — and the trail led to the
+  filter envelope reading raw MIDI velocity instead of the patch's own response curve, leaving it
+  about a third of an octave too open on 13.5% of the library.
+- In the other direction, a 0.72 correlation looked like an open defect long after the audible fault
+  in that passage — notes cut off by the sustain pedal — had been fixed. A person listening said it
+  was fine, and the measurement agreed once asked the right question.
+
+Measurement finds what it is pointed at. Deciding where to point it, and knowing when a residual
+stops mattering, has needed a human in every case so far.
 
 ## Licence
 

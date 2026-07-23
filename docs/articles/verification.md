@@ -23,9 +23,23 @@ sweeps, taken with the spec repo's `scdec` harness. Where the two disagree, **th
 | send effects | all 26 networks matched by impulse response |
 | full song | ~1 LSB against the reference over 7.9 million samples |
 
+## The goal is audible fidelity, not bit accuracy
+
+Worth stating before the departures below, because it is what licenses them. Individual layers are
+held to bit exactness where the hardware is deterministic — tables, codec, tick streams. The rendered
+output is not, and the tests assert correlation, level and spectrum against stated tolerances instead.
+
+Part of the residual is inaudible by construction. In a dense passage the few-millisecond amplitude
+envelope is dominated by beating between simultaneous notes, which is chaotically sensitive: onestop's
+harpsichord section correlates at 0.72 on a 4 ms envelope, rises to 0.91 as the window widens to
+250 ms, and matches the DLL's spectrum within 0.5 dB in every band. Nothing there is wrong. A metric
+that looks bad is a lead to investigate, not a defect in itself.
+
 ## Where this engine departs from the reference
 
-One case, deliberately. The reference stops decoding one sample short of a loop's data end, so its
+Four cases, each deliberate, each because the hardware was measured and disagreed.
+
+**The loop's last sample.** The reference stops decoding one sample short of a loop's data end, so its
 forward loop substitutes the loop's *first* sample for the last and plays it twice per pass. The
 hardware does not.
 
@@ -40,6 +54,25 @@ audible as glitchiness — and it also dulled the timbre measurably:
 This engine follows the hardware. The consequence is that voice-level comparisons against the
 reference assert correlation and level rather than sample equality, and the reason is documented in
 the test that does it.
+
+**Note-off waits for the control tick.** The reference releases at the note-off sample; the engine
+acts on it at its next 100 Hz tick. Measured by sweeping the hold past a boundary — note-off anywhere
+in 1000–1008 ms produced the same release, which stepped a whole tick later at 1010 ms, and one
+landing exactly on a tick still waited a full one. Releasing immediately runs the tail up to 10 ms
+early: inaudible on a pad, most of a short release. Across seven patches this took the release-onset
+error from 6.0 ms to 2.3 ms.
+
+**The filter envelope's velocity response.** The reference feeds raw MIDI velocity to the depth
+scaler. The engine feeds it through one of sixteen response curves selected by `block[0x2e]`. Row 0
+is the identity, so most of the library agrees either way; 13.5% of filtered partials do not. Brass 1
+selects row 1, which reads velocity 100 as 71 — on raw velocity its filter sits about a third of an
+octave too open for the whole note, measuring +3.5 dB at 4–8 kHz and +6.3 dB above it.
+
+**A note re-struck under the sustain pedal.** A note-off arriving with the damper down is parked
+rather than acted on. The reference leaves that parked entry in place when the note is re-struck, so
+the pedal's lift releases the strike the player is still holding. onestop.mid's harpsichord passage
+rides the pedal every half second over constantly re-struck notes and loses 24 notes to it — all of
+them in that passage, none elsewhere in the song, each cut 20–80 ms after sounding.
 
 ## Known limits
 
