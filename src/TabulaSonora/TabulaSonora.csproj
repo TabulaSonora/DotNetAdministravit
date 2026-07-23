@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>TabulaSonora</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The offset map is original work and ships with the library; the data it points at does not. -->
+    <EmbeddedResource Include="Rom\manifest.json" LogicalName="TabulaSonora.Rom.manifest.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Effect coefficients are read out of SCCore.dll and are Roland's, so they are NOT embedded and
+      NOT committed. Build them locally with 'tabula-sonora bake-presets'; the condition means the
+      build still succeeds without them and the failure surfaces at run time with instructions.
+    -->
+    <None Include="Effects\presets.json"
+          Condition="Exists('Effects\presets.json')"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="presets.json" />
+  </ItemGroup>
+
+</Project>

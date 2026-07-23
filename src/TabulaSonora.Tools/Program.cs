@@ -1,0 +1,340 @@
+using System.Globalization;
+using TabulaSonora.Rom;
+
+if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
+{
+    Usage();
+    return 0;
+}
+
+try
+{
+    return args[0] switch
+    {
+        "extract-tables" => ExtractTables(args.AsSpan(1)),
+        "info" => Info(args.AsSpan(1)),
+        "dump-effect" => DumpEffect(args.AsSpan(1)),
+        "render" => Render(args.AsSpan(1)),
+        "bake-presets" => BakePresets(args.AsSpan(1)),
+        "render-note" => RenderNote(args.AsSpan(1)),
+        _ => Fail($"Unknown command '{args[0]}'."),
+    };
+}
+catch (RomIdentityException ex)
+{
+    Console.Error.WriteLine($"error: {ex.Message}");
+    return 2;
+}
+catch (Exception ex) when (ex is IOException or InvalidDataException or KeyNotFoundException
+                              or InvalidOperationException)
+{
+    // Missing locally generated data is an expected, actionable condition -- report it as advice
+    // rather than as a crash.
+    Console.Error.WriteLine($"error: {ex.Message}");
+    return 1;
+}
+
+static void Usage()
+{
+    Console.WriteLine("""
+        tabula-sonora - tooling for the Tabula Sonora engine
+
+          extract-tables <SCCore.dll> <output-directory>
+              Verify the DLL is the pinned build, then write all 48 static tables as
+              byte-for-byte .bin slices. Equivalent to the spec repo's extract_tables.py.
+
+          info <SCCore.dll>
+              Print the build identity and the wave-ROM block map.
+
+          bake-presets <SCCore.dll> <tables-directory> <output.json>
+              Build the effect preset file from the DLL and the scdec revdump/chodump
+              coefficient dumps. These are Roland-derived, so they are generated locally
+              and never redistributed; the library looks for presets.json beside itself,
+              or wherever TABULASONORA_PRESETS points.
+        """);
+}
+
+static int Fail(string message)
+{
+    Console.Error.WriteLine($"error: {message}");
+    Console.Error.WriteLine();
+    Usage();
+    return 1;
+}
+
+static int ExtractTables(ReadOnlySpan<string> args)
+{
+    if (args.Length != 2)
+    {
+        return Fail("extract-tables needs a DLL path and an output directory.");
+    }
+
+    var dllPath = args[0];
+    var outputDirectory = args[1];
+
+    using var rom = RomImage.Open(dllPath);
+    Directory.CreateDirectory(outputDirectory);
+
+    var written = 0;
+    long bytes = 0;
+    foreach (var entry in rom.Manifest.CachedTables)
+    {
+        var data = rom.Read(entry);
+        File.WriteAllBytes(Path.Combine(outputDirectory, entry.Name), data);
+        written++;
+        bytes += data.Length;
+    }
+
+    Console.WriteLine($"Verified {Path.GetFileName(dllPath)} against the pinned build.");
+    Console.WriteLine($"Wrote {written} tables ({bytes:N0} bytes) to {outputDirectory}");
+    return 0;
+}
+
+static int Info(ReadOnlySpan<string> args)
+{
+    if (args.Length != 1)
+    {
+        return Fail("info needs a DLL path.");
+    }
+
+    using var rom = RomImage.Open(args[0], RomVerification.Quick);
+    var dll = rom.Manifest.Dll;
+    var timestamp = rom.ReadPeTimestamp();
+    var sha256 = rom.ComputeSha256();
+    var matches = string.Equals(sha256, dll.Sha256, StringComparison.OrdinalIgnoreCase);
+
+    Console.WriteLine($"path          {rom.Path}");
+    Console.WriteLine($"size          {rom.Length:N0} bytes (pinned {dll.Size:N0})");
+    Console.WriteLine($"pe timestamp  {timestamp} " +
+        $"({DateTimeOffset.FromUnixTimeSeconds(timestamp).UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC)");
+    Console.WriteLine($"sha256        {sha256}");
+    Console.WriteLine($"              {(matches ? "matches the pinned build" : "DOES NOT MATCH the pinned build")}");
+    Console.WriteLine();
+    Console.WriteLine(
+        $"{rom.Manifest.CachedTables.Count} static tables, {rom.Manifest.LiveRegions.Count} live regions");
+    Console.WriteLine();
+
+    var waveRom = new WaveRom(rom);
+    Console.WriteLine("wave ROM blocks");
+    foreach (var bank in new[] { 0, 1 })
+    {
+        for (var region = 0; region < WaveRom.RegionCount(bank); region++)
+        {
+            var offset = waveRom.BankBase(bank) + ((long)region * WaveRom.RegionSize);
+            var header = rom.Read(offset, 0x50);
+            Console.WriteLine(string.Format(
+                CultureInfo.InvariantCulture,
+                "  bank {0} region {1,2}  0x{2:x8}  {3,-10} {4}",
+                bank == 0 ? "A" : "B",
+                region,
+                offset,
+                Ascii(header, 0x20),
+                Ascii(header, 0x30)));
+        }
+    }
+
+    return 0;
+}
+
+static int Render(ReadOnlySpan<string> args)
+{
+    if (args.Length < 3)
+    {
+        return Fail("render <SCCore.dll> <input.mid> <output.wav> [--map 1..4] [--tail SEC] " +
+                    "[--end SEC] [--no-reverb] [--no-chorus] [--no-delay] " +
+                    "[--mute 1,2] [--solo 5,6]   (channels are 1-16)");
+    }
+
+    var dllPath = args[0];
+    var midiPath = args[1];
+    var outputPath = args[2];
+
+    var options = new TabulaSonora.RenderOptions();
+    for (var i = 3; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--map":
+                options = options with { Map = (TabulaSonora.Patches.ToneMap)int.Parse(args[++i], CultureInfo.InvariantCulture) };
+                break;
+            case "--tail":
+                options = options with { TailSeconds = double.Parse(args[++i], CultureInfo.InvariantCulture) };
+                break;
+            case "--end":
+                options = options with { EndSeconds = double.Parse(args[++i], CultureInfo.InvariantCulture) };
+                break;
+            case "--reverb": options = options with { Reverb = true }; break;
+            case "--chorus": options = options with { Chorus = true }; break;
+            case "--delay": options = options with { Delay = true }; break;
+            case "--no-reverb": options = options with { Reverb = false }; break;
+            case "--no-chorus": options = options with { Chorus = false }; break;
+            case "--no-delay": options = options with { Delay = false }; break;
+            case "--mute":
+                options = options with { Channels = WithChannels(options.Channels, args[++i], mute: true) };
+                break;
+            case "--solo":
+                options = options with { Channels = WithChannels(options.Channels, args[++i], mute: false) };
+                break;
+            default: return Fail($"Unknown option '{args[i]}'.");
+        }
+    }
+
+    using var rom = RomImage.Open(dllPath, RomVerification.Quick);
+    var started = Environment.TickCount64;
+
+    var renderer = TabulaSonora.SequenceRenderer.Create(rom);
+    var result = renderer.RenderFile(midiPath, options);
+
+    WriteWav(outputPath, result.Left, result.Right, result.SampleRate);
+
+    var seconds = result.Left.Length / (double)result.SampleRate;
+    var routing = options.Channels is { IsDefault: false } mask
+        ? $", channels {string.Join(",", mask.AudibleChannels().Select(c => c + 1))}"
+        : string.Empty;
+
+    Console.WriteLine(
+        $"{Path.GetFileName(midiPath)} -> {outputPath}: {seconds:F1}s stereo, " +
+        $"{result.NoteCount} notes, peak {result.Peak:F4}{routing}, " +
+        $"took {(Environment.TickCount64 - started) / 1000.0:F1}s");
+    return 0;
+}
+
+/// <summary>Applies a comma-separated 1-based channel list to the mask.</summary>
+static TabulaSonora.ChannelMask WithChannels(TabulaSonora.ChannelMask? mask, string list, bool mute)
+{
+    mask ??= new TabulaSonora.ChannelMask();
+    foreach (var part in list.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        // Channels are given the way a mixer shows them, 1-16.
+        var channel = int.Parse(part, CultureInfo.InvariantCulture) - 1;
+        if (mute)
+        {
+            mask.SetMuted(channel, true);
+        }
+        else
+        {
+            mask.SetSoloed(channel, true);
+        }
+    }
+
+    return mask;
+}
+
+static int BakePresets(ReadOnlySpan<string> args)
+{
+    if (args.Length != 3)
+    {
+        return Fail("bake-presets <SCCore.dll> <tables-directory> <output.json>");
+    }
+
+    Console.WriteLine(TabulaSonora.Tools.PresetBaker.Bake(args[0], args[1], args[2]));
+    return 0;
+}
+
+static int RenderNote(ReadOnlySpan<string> args)
+{
+    if (args.Length < 6)
+    {
+        return Fail("render-note <SCCore.dll> <program> <note> <velocity> <holdSec> <out.f32> [map]");
+    }
+
+    using var rom = RomImage.Open(args[0], RomVerification.Quick);
+    var renderer = new TabulaSonora.NoteRenderer(rom);
+
+    var program = int.Parse(args[1], CultureInfo.InvariantCulture);
+    var note = int.Parse(args[2], CultureInfo.InvariantCulture);
+    var velocity = int.Parse(args[3], CultureInfo.InvariantCulture);
+    var hold = double.Parse(args[4], CultureInfo.InvariantCulture);
+    var map = args.Length > 6
+        ? (TabulaSonora.Patches.ToneMap)int.Parse(args[6], CultureInfo.InvariantCulture)
+        : TabulaSonora.Patches.ToneMap.Sc8820;
+
+    var voice = renderer.RenderNote(program, note, velocity, hold, tailSeconds: 1.8, map);
+
+    using var stream = File.Create(args[5]);
+    using var writer = new BinaryWriter(stream);
+    for (var i = 0; i < voice.Left.Length; i++)
+    {
+        writer.Write(voice.Left[i]);
+        writer.Write(voice.Right[i]);
+    }
+
+    Console.WriteLine($"{voice.Name}: {voice.Left.Length} frames");
+    return 0;
+}
+
+static void WriteWav(string path, float[] left, float[] right, int sampleRate)
+{
+    // Fixed full-scale gain, no per-file normalisation, so absolute level stays comparable.
+    using var stream = File.Create(path);
+    using var writer = new BinaryWriter(stream);
+
+    var frames = left.Length;
+    var dataBytes = frames * 4;
+
+    writer.Write("RIFF"u8);
+    writer.Write(36 + dataBytes);
+    writer.Write("WAVE"u8);
+    writer.Write("fmt "u8);
+    writer.Write(16);
+    writer.Write((short)1);
+    writer.Write((short)2);
+    writer.Write(sampleRate);
+    writer.Write(sampleRate * 4);
+    writer.Write((short)4);
+    writer.Write((short)16);
+    writer.Write("data"u8);
+    writer.Write(dataBytes);
+
+    for (var i = 0; i < frames; i++)
+    {
+        writer.Write((short)Math.Clamp(left[i] * 32767.0, -32768.0, 32767.0));
+        writer.Write((short)Math.Clamp(right[i] * 32767.0, -32768.0, 32767.0));
+    }
+}
+
+static int DumpEffect(ReadOnlySpan<string> args)
+{
+    if (args.Length != 4)
+    {
+        return Fail("dump-effect needs <reverb|chorus|delay> <type> <samples> <out.f32>");
+    }
+
+    var kind = args[0];
+    var type = int.Parse(args[1], CultureInfo.InvariantCulture);
+    var samples = int.Parse(args[2], CultureInfo.InvariantCulture);
+    var path = args[3];
+
+    var input = new float[samples];
+    input[0] = 1f;
+    var left = new float[samples];
+    var right = new float[samples];
+
+    TabulaSonora.Effects.IEffect effect = kind switch
+    {
+        "reverb" => TabulaSonora.Effects.Reverb.ForType(type),
+        "chorus" => TabulaSonora.Effects.Chorus.ForType(type),
+        "delay" => TabulaSonora.Effects.SystemDelay.ForType(type),
+        _ => throw new ArgumentException($"Unknown effect '{kind}'."),
+    };
+
+    effect.Process(input, left, right);
+
+    using var stream = File.Create(path);
+    using var writer = new BinaryWriter(stream);
+    for (var i = 0; i < samples; i++)
+    {
+        writer.Write(left[i]);
+        writer.Write(right[i]);
+    }
+
+    Console.WriteLine($"wrote {path}: {samples} stereo samples");
+    return 0;
+}
+
+static string Ascii(byte[] header, int offset)
+{
+    var span = header.AsSpan(offset, 16);
+    var end = span.IndexOf((byte)0);
+    return System.Text.Encoding.ASCII.GetString(end < 0 ? span : span[..end]).Trim();
+}

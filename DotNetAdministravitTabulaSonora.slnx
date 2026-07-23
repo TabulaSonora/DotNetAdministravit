@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TabulaSonora.Tools/TabulaSonora.Tools.csproj" />
+    <Project Path="src/TabulaSonora/TabulaSonora.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TabulaSonora.Tests/TabulaSonora.Tests.csproj" />
+  </Folder>
+</Solution>

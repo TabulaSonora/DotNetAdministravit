@@ -1,0 +1,365 @@
+using TabulaSonora.Patches;
+using TabulaSonora.Rom;
+
+namespace TabulaSonora.Dsp;
+
+/// <summary>The pitch envelope's decoded segment targets and timings.</summary>
+/// <param name="Start">Starting offset, in milli-semitones.</param>
+/// <param name="Targets">The four segment targets.</param>
+/// <param name="Release">The release target.</param>
+/// <param name="Times">Segment durations in milliseconds.</param>
+/// <param name="ReleaseMs">Release duration in milliseconds.</param>
+public readonly record struct PitchEnvelope(
+    int Start,
+    int[] Targets,
+    int Release,
+    double[] Times,
+    double ReleaseMs);
+
+/// <summary>
+/// The pitch side of a voice: key-follow, transposition, the pitch envelope, and bend.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Pitch is absolute, in milli-semitones, and the engine clamps the accumulator to
+/// <c>[0, 0x1f018]</c> — 127 semitones × 1000, which is what fixes the unit. Working in offsets from
+/// a base cannot express that clamp, and at least one patch sits exactly on it: Jetplane's first
+/// partial has a base of 24000 with an envelope starting at −24000, landing on zero.
+/// </para>
+/// </remarks>
+public sealed class PitchChain
+{
+    /// <summary>Upper clamp of the pitch accumulator: 127 semitones in milli-semitones.</summary>
+    public const int MaxPitchMilliSemitones = 0x1F018;
+
+    /// <summary>The key-follow scale lookup, giving a clean 0% to 100% ladder in steps of 10%.</summary>
+    private static readonly int[] KeyFollowScale =
+        [0, 3276, 6553, 9830, 13107, 16383, 19660, 22937, 26214, 29491, 32767];
+
+    private readonly EnvelopeMachine _envelope;
+    private readonly byte[] _pitchBias;
+    private readonly ushort[] _depthVelocitySensitivity;
+    private readonly byte[] _rateKeyFollow0;
+    private readonly byte[] _rateKeyFollow1;
+    private readonly short[] _keyFollow;
+    private readonly short[] _depthSlope;
+    private readonly ushort[] _rateCurve;
+
+    /// <summary>Creates the chain over a loaded table set.</summary>
+    /// <param name="tables">The static tables.</param>
+    /// <param name="envelope">The shared segment machine.</param>
+    public PitchChain(TableSet tables, EnvelopeMachine envelope)
+    {
+        ArgumentNullException.ThrowIfNull(tables);
+        ArgumentNullException.ThrowIfNull(envelope);
+
+        _envelope = envelope;
+        _pitchBias = tables.PitchBias;
+        _depthVelocitySensitivity = tables.PitchDepthVs;
+        _rateKeyFollow0 = tables.KfPitchRate0;
+        _rateKeyFollow1 = tables.KfPitchRate1;
+        _keyFollow = tables.KfPitch;
+        _rateCurve = tables.RateCurve;
+
+        // The depth velocity-sensitivity slope is a signed-16 view of the first 0x80 entries of the
+        // pitch-envelope export.
+        _depthSlope = new short[0x80];
+        for (var i = 0; i < _depthSlope.Length; i++)
+        {
+            _depthSlope[i] = (short)(tables.PitchEnv[i * 2] | (tables.PitchEnv[(i * 2) + 1] << 8));
+        }
+    }
+
+    /// <summary>
+    /// The effective pitch key and its fractional crossfade weight.
+    /// </summary>
+    /// <param name="partial">The partial's parameter block.</param>
+    /// <param name="note">MIDI note.</param>
+    /// <param name="keyCenter">The multisample's key centre.</param>
+    /// <returns>The effective key and the crossfade weight.</returns>
+    /// <remarks>
+    /// <c>block[0x13]</c> is the follow amount: 0x40 is no follow (the key centre sounds regardless of
+    /// the note), 0x4a is full follow, and values between scale the note's distance from the centre.
+    /// A reduced-follow patch like the Seashore effect plays note 33 as key 55, which keeps its noise
+    /// bright instead of an octave-too-low rumble.
+    /// </remarks>
+    public static (int Key, int Weight) KeyFollowKey(PartialParameters partial, int note, int keyCenter = 0x3C)
+    {
+        var raw = partial.Raw;
+        var transpose = raw[0x10] - 0x40;
+        var amount = raw[0x13] - 0x40;
+
+        if (amount == 10 || amount < 0)
+        {
+            return (note + transpose, 0);
+        }
+
+        if (amount == 0)
+        {
+            return (keyCenter + transpose, 0);
+        }
+
+        var distance = note - keyCenter;
+        var product = KeyFollowScale[Math.Min(amount, 10)] * (Math.Abs(distance) * 2);
+        var high = product >> 16;
+        var low = product & 0xFFFF;
+
+        int weight;
+        int keyStep;
+        if (low < 65000)
+        {
+            var scaled = (low * 999) / 65000;
+            if (distance >= 0)
+            {
+                weight = scaled;
+                keyStep = high;
+            }
+            else
+            {
+                weight = 1000 - scaled;
+                keyStep = ~high;
+            }
+        }
+        else
+        {
+            weight = 0;
+            keyStep = distance >= 0 ? high + 1 : ~high;
+        }
+
+        return (keyCenter + keyStep + transpose, weight);
+    }
+
+    /// <summary>
+    /// The note's absolute base pitch in milli-semitones.
+    /// </summary>
+    /// <param name="partial">The partial's parameter block.</param>
+    /// <param name="note">MIDI note.</param>
+    /// <param name="keyCenter">The multisample's key centre.</param>
+    /// <returns>The base pitch.</returns>
+    public int BasePitchMilliSemitones(PartialParameters partial, int note, int keyCenter = 0x3C)
+    {
+        var raw = partial.Raw;
+        var (key, weight) = KeyFollowKey(partial, note, keyCenter);
+        key = Math.Clamp(key, 0, 0x7F);
+
+        var row = Math.Clamp((raw[0x13] - 0x40) >> 2, 0, 7);
+        return (key * 1000) + weight + _keyFollow[(row * 0x80) + key] + ((raw[0x11] - 0x40) * 10);
+    }
+
+    /// <summary>Pitch-bend offset in milli-semitones.</summary>
+    /// <param name="bend">14-bit bend value, 8192 centre.</param>
+    /// <param name="semitoneRange">Bend range from RPN 00/00; the GM default is 2.</param>
+    /// <returns>The offset.</returns>
+    public static double BendOffsetMilliSemitones(int bend = 8192, double semitoneRange = 2.0) =>
+        (bend - 8192) / 8192.0 * semitoneRange * 1000.0;
+
+    /// <summary>
+    /// Decodes the pitch envelope's targets and timings.
+    /// </summary>
+    /// <param name="partial">The partial's parameter block.</param>
+    /// <param name="key">MIDI key.</param>
+    /// <param name="velocity">MIDI velocity.</param>
+    /// <returns>The envelope, or <see langword="null"/> when it is disabled.</returns>
+    public PitchEnvelope? EnvelopeOffsets(PartialParameters partial, int key, int velocity)
+    {
+        var raw = partial.Raw;
+        var depth = raw[0x18] | (raw[0x19] << 8);
+        if (depth == 0)
+        {
+            return null;
+        }
+
+        var sensitivity = raw[0x2B] - 0x40;
+        int scaledDepth;
+        if (sensitivity == 0)
+        {
+            scaledDepth = depth;
+        }
+        else
+        {
+            var v = Math.Clamp(velocity, 0, 127);
+            if (sensitivity < 0)
+            {
+                sensitivity = -sensitivity;
+                v = (-v) & 0x7F;
+            }
+
+            scaledDepth = (((_depthSlope[sensitivity] * v) + _depthVelocitySensitivity[sensitivity]) * depth
+                + 0x8000) >> 16;
+        }
+
+        int Delta(int bias)
+        {
+            if (bias == 0)
+            {
+                return 0;
+            }
+
+            var d = (_pitchBias[Math.Min(64, Math.Abs(bias))] * scaledDepth) >> 7;
+            return bias < 0 ? -d : d;
+        }
+
+        var biases = new int[5];
+        for (var i = 0; i < 5; i++)
+        {
+            biases[i] = (sbyte)raw[0x1B + i] - 0x40;
+        }
+
+        var mainRate = _envelope.RateScale(
+            (_rateKeyFollow0[(raw[0x27] * 0x80) + (key & 0x7F)] - 0x80) & 0xFF, raw[0x29]);
+        var releaseRate = _envelope.RateScale(
+            (_rateKeyFollow1[(raw[0x27] * 0x80) + (key & 0x7F)] - 0x80) & 0xFF, raw[0x2A]);
+        var velocityScale = _envelope.LevelScale(Math.Clamp(velocity, 0, 127), raw[0x2C]);
+
+        double Time(int rateByte, int rateMultiplier)
+        {
+            var r = rateByte & 0x7F;
+            int ticks = _rateCurve[r];
+            return r == 0 || ticks < EnvelopeMachine.MinimumSegmentTicks
+                ? 0
+                : ((((rateMultiplier * ticks) >> 8) & 0xFFFF) * velocityScale) >> 8;
+        }
+
+        var times = new double[4];
+        for (var i = 0; i < 4; i++)
+        {
+            times[i] = Time(raw[0x20 + i], mainRate);
+        }
+
+        // The fourth target is always zero: the envelope returns to the base pitch.
+        var targets = new[] { Delta(biases[1]), Delta(biases[2]), Delta(biases[3]), 0 };
+
+        return new PitchEnvelope(
+            Delta(biases[0]), targets, Delta(biases[4]), times, Time(raw[0x24], releaseRate));
+    }
+
+    /// <summary>
+    /// The segment machine's rate word for a duration.
+    /// </summary>
+    /// <param name="milliseconds">Segment duration.</param>
+    /// <returns>The rate word.</returns>
+    /// <remarks>
+    /// 0xffff wraps the 16-bit phase in exactly one control tick, so even a zero-length segment still
+    /// occupies one tick.
+    /// </remarks>
+    public static int SegmentRateWord(double milliseconds) =>
+        milliseconds < 11 ? 0xFFFF : Math.Min(0xFFFF, 0xA0000 / (int)milliseconds);
+
+    /// <summary>
+    /// The pitch envelope's offset at each control tick, in milli-semitones.
+    /// </summary>
+    /// <param name="partial">The partial's parameter block.</param>
+    /// <param name="key">MIDI key.</param>
+    /// <param name="velocity">MIDI velocity.</param>
+    /// <param name="holdSeconds">Time from note-on to note-off.</param>
+    /// <param name="tickCount">How many control ticks to produce.</param>
+    /// <returns>The offsets, or <see langword="null"/> when the envelope is inactive.</returns>
+    /// <remarks>
+    /// The value is stepwise, held for the whole control block, and tick <c>i</c> is the state
+    /// <em>after</em> that tick's update. A segment completes when the phase reaches 0xffff — not
+    /// exceeds it — and the next segment starts with a fresh phase rather than carrying the remainder.
+    /// </remarks>
+    public double[]? EnvelopeTicks(
+        PartialParameters partial,
+        int key,
+        int velocity,
+        double holdSeconds,
+        int tickCount)
+    {
+        var envelope = EnvelopeOffsets(partial, key, velocity);
+        if (envelope is null)
+        {
+            return null;
+        }
+
+        var (start, targets, release, times, releaseMs) = envelope.Value;
+        if (start == 0 && Array.TrueForAll(targets, t => t == 0) && release == 0)
+        {
+            return null;
+        }
+
+        var rates = new int[4];
+        for (var i = 0; i < 4; i++)
+        {
+            rates[i] = SegmentRateWord(times[i]);
+        }
+
+        var output = new double[Math.Max(0, tickCount)];
+        double segmentStart = start;
+        double level = start;
+        var segment = 0;
+        var phase = 0;
+        var noteOffTick = (int)(holdSeconds * 100);
+        var released = false;
+
+        for (var i = 0; i < output.Length; i++)
+        {
+            double target;
+            int rate;
+
+            if (i >= noteOffTick && !released)
+            {
+                released = true;
+                segmentStart = level;
+                segment = -1;
+                phase = 0;
+                target = release;
+                rate = SegmentRateWord(releaseMs);
+            }
+            else if (segment < 0)
+            {
+                target = release;
+                rate = SegmentRateWord(releaseMs);
+            }
+            else if (segment < 4)
+            {
+                target = targets[segment];
+                rate = rates[segment];
+            }
+            else
+            {
+                output[i] = level;
+                continue;
+            }
+
+            phase += rate;
+            if (phase >= 0xFFFF)
+            {
+                level = target;
+                segmentStart = target;
+                phase = 0;
+                if (segment >= 0)
+                {
+                    segment++;
+                }
+            }
+            else
+            {
+                level = segmentStart + ((target - segmentStart) * (phase / 65536.0));
+            }
+
+            output[i] = level;
+        }
+
+        return output;
+    }
+
+    /// <summary>
+    /// The playback ratio for a partial, from its absolute pitch against the sample's own root.
+    /// </summary>
+    /// <param name="partial">The partial's parameter block.</param>
+    /// <param name="descriptor">The selected wave's descriptor.</param>
+    /// <param name="pitchMilliSemitones">Absolute pitch, already summed and clamped.</param>
+    /// <returns>The frequency ratio.</returns>
+    public static double Ratio(PartialParameters partial, WaveDescriptor descriptor, double pitchMilliSemitones)
+    {
+        var native = (descriptor.RootKey * 1000.0) + 1024.0 - descriptor.FineTune;
+        return Math.Pow(2.0, (pitchMilliSemitones - native) / 12000.0);
+    }
+
+    /// <summary>Clamps an absolute pitch the way the engine's accumulator does.</summary>
+    /// <param name="milliSemitones">The unclamped pitch.</param>
+    /// <returns>The clamped pitch.</returns>
+    public static double Clamp(double milliSemitones) =>
+        Math.Clamp(milliSemitones, 0, MaxPitchMilliSemitones);
+}
