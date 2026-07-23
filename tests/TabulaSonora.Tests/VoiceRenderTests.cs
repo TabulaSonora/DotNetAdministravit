@@ -142,10 +142,31 @@ public class VoiceRenderTests
     }
 
     [SkippableFact]
-    public void AnUnassignedProgramRendersSilenceRatherThanThrowing()
+    public void AVariationBankWithNoEntryFallsBackToTheCapitalTone()
     {
-        var voice = Renderer().RenderNote(program: 0, note: 60, velocity: 100,
+        // A bank select picks a variation. When that variation has no entry for the program, a Sound
+        // Canvas does not fall silent -- it sounds the capital tone at bank 0. passport.mid depends on
+        // this: its honky-tonk part selects bank 5, whose program-3 slot is empty, and every note would
+        // otherwise be dropped. The fallback must land on exactly the capital tone, so an empty
+        // variation is indistinguishable from bank 0.
+        var renderer = Renderer();
+        var capital = renderer.RenderNote(program: 0, note: 60, velocity: 100,
+            holdSeconds: 0.1, tailSeconds: 0.1, ToneMap.Sc55, bank: 0);
+        var variation = renderer.RenderNote(program: 0, note: 60, velocity: 100,
             holdSeconds: 0.1, tailSeconds: 0.1, ToneMap.Sc55, bank: 120);
+
+        Assert.Contains(variation.Left, s => s != 0f);
+        Assert.Equal(capital.Left, variation.Left);
+        Assert.Equal(capital.Right, variation.Right);
+    }
+
+    [SkippableFact]
+    public void AnUnresolvableProgramRendersSilenceRatherThanThrowing()
+    {
+        // An unmapped tone map resolves to no tone even after the capital-tone fallback, so it exercises
+        // the graceful no-voice path the way an unassigned bank once did.
+        var voice = Renderer().RenderNote(program: 0, note: 60, velocity: 100,
+            holdSeconds: 0.1, tailSeconds: 0.1, (ToneMap)0, bank: 0);
 
         Assert.All(voice.Left, s => Assert.Equal(0f, s));
         Assert.All(voice.Right, s => Assert.Equal(0f, s));

@@ -389,6 +389,31 @@ public sealed class PatchDirectory
         return _tables.DirLut3[index3];
     }
 
+    /// <summary>
+    /// The three-level lookup with the GS capital-tone fallback applied.
+    /// </summary>
+    /// <param name="program">Program number, 0–127.</param>
+    /// <param name="map">Tone map.</param>
+    /// <param name="bank">Bank select MSB.</param>
+    /// <returns>The word, or <see langword="null"/> if even the capital tone is unassigned.</returns>
+    /// <remarks>
+    /// A bank select picks a variation. When the selected variation has no entry for the program, a
+    /// Sound Canvas does not fall silent — it sounds the capital tone at bank 0 instead. Reproducing
+    /// that here is what lets a file play a note on a variation bank the ROM never filled in, which is
+    /// exactly what one honky-tonk part in passport.mid does: it selects bank 5, whose program-3 slot
+    /// is empty, and every note would otherwise be dropped.
+    /// </remarks>
+    public int? Lut3Resolved(int program, ToneMap map, int bank)
+    {
+        var raw = Lut3Raw(program, map, bank);
+        if (bank != 0 && (raw is null || raw == Unassigned))
+        {
+            raw = Lut3Raw(program, map, 0);
+        }
+
+        return raw;
+    }
+
     /// <summary>Decodes an entry of the alternate-articulation table.</summary>
     /// <param name="index">Entry index, i.e. <c>tone# − 0x6000</c>.</param>
     /// <returns>The entry, or <see langword="null"/> if out of range.</returns>
@@ -423,7 +448,7 @@ public sealed class PatchDirectory
     /// </remarks>
     public IReadOnlyList<int> ProgramTones(int program, ToneMap map, int bank)
     {
-        var raw = Lut3Raw(program, map, bank);
+        var raw = Lut3Resolved(program, map, bank);
         if (raw is null || raw == Unassigned || raw >= IndirectOnlyFlag)
         {
             return [];
@@ -456,7 +481,7 @@ public sealed class PatchDirectory
     /// </remarks>
     public int AlternateTone(int program, ToneMap map, int bank)
     {
-        var raw = Lut3Raw(program, map, bank);
+        var raw = Lut3Resolved(program, map, bank);
         if (raw is null || raw == Unassigned || raw >= IndirectOnlyFlag || raw < AlternateSpaceStart)
         {
             return -1;
