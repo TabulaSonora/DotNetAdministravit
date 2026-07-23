@@ -1,0 +1,6 @@
+- name: Architecture
+  href: architecture.md
+- name: Getting started
+  href: getting-started.md
+- name: Verification
+  href: verification.md

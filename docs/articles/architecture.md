@@ -1,0 +1,119 @@
+# Architecture
+
+## Four clock domains
+
+Most of the design falls out of the fact that the original engine runs on four different clocks.
+
+| Domain | Rate | What happens there |
+|---|---|---|
+| Event time | sample-accurate | MIDI ingest, parsing, SysEx |
+| Control tick | **100 Hz** (320 samples) | envelopes, LFOs, coefficient recompute |
+| Audio block | 32 kHz internal, **32-sample blocks** | samplers, filters, bus mix, effects |
+| Host rate | whatever the host asks for | a 2× interpolating rate conversion at the very end |
+
+```mermaid
+flowchart LR
+    E["Event time<br/><small>sample-accurate</small>"]
+    C["Control tick<br/><b>100 Hz</b><br/><small>320 samples</small>"]
+    B["Audio block<br/><b>32 kHz</b><br/><small>32 samples</small>"]
+    H["Host rate<br/><small>2&times; interpolating SRC</small>"]
+
+    E -->|"events land on the<br/>32-sample grid"| B
+    C -->|"envelopes, LFOs,<br/>coefficients"| B
+    B --> H
+
+    style C stroke-dasharray: 4 3
+```
+
+The engine always renders at 32 kHz, the hardware's own rate. Everything upstream of the final
+conversion is in that domain, which is why [`NoteRenderer.SampleRate`](xref:TabulaSonora.NoteRenderer.SampleRate)
+is a constant rather than a setting.
+
+Note that MIDI events land on the **32-sample** block grid, not the 100 Hz control tick. Reading a
+controller at tick resolution is ten times too coarse and audibly smears a continuous pitch bend —
+this was a real defect during development.
+
+## Objects at the seams, flat arrays underneath
+
+The library is object-oriented where dispatch is cheap and data-oriented where it is not.
+
+Control-rate work — patch resolution, envelopes, effect selection — is ordinary C# with real types
+and real polymorphism. At 100 Hz, or once per 32-sample block, a virtual call costs nothing
+measurable.
+
+Per-sample work is flat. [`VoicePool`](xref:TabulaSonora.Voices.VoicePool) holds its 64 voices as
+parallel arrays rather than as objects, which is the shape the original uses too: it renders voices
+in SIMD-friendly groups of four. [`Voice`](xref:TabulaSonora.Voices.Voice) is a handle — an index plus
+control-rate operations — not a container for render state.
+
+## The signal path
+
+```mermaid
+flowchart TD
+    MIDI["MIDI file<br/><small>SmfReader, SequenceBuilder</small>"] --> DIR
+
+    subgraph resolve["Patch resolution &mdash; control rate"]
+        DIR["PatchDirectory<br/><small>three-level lookup, three tone spaces</small>"]
+        TONE["tone &rarr; partial"]
+        MS["multisample<br/><small>key and velocity zones</small>"]
+        WD["wave descriptor<br/><small>ROM coordinates, root, loop</small>"]
+        DIR --> TONE --> MS --> WD
+    end
+
+    subgraph voice["Per-voice render &mdash; audio rate"]
+        CODEC["WaveCodec<br/><small>block-floating-point DPCM</small>"]
+        INTERP["Interpolator<br/><small>4-tap FIR, 128 phases</small>"]
+        SVF["StateVariableFilter<br/><small>Chamberlin, four taps</small>"]
+        TVA["TvaChain<br/><small>log-domain level chain</small>"]
+        PAN["PanLaw<br/><small>exact 128-entry table</small>"]
+        CODEC --> INTERP --> SVF --> TVA --> PAN
+    end
+
+    subgraph control["Modulation &mdash; 100 Hz control tick"]
+        PITCH["PitchChain<br/><small>absolute milli-semitones</small>"]
+        LFO["LfoEngine<br/><small>two engines, three destinations</small>"]
+        TVF["TvfChain<br/><small>cutoff envelope, f and q</small>"]
+    end
+
+    WD --> CODEC
+    PITCH -.->|read rate| INTERP
+    LFO -.->|pitch| INTERP
+    LFO -.->|cutoff| SVF
+    LFO -.->|amplitude| TVA
+    TVF -.->|coefficients| SVF
+
+    PAN --> BUS["bus accumulator<br/><small>dry, plus three sends</small>"]
+    BUS --> FX["Reverb &bull; Chorus &bull; SystemDelay"]
+    BUS --> OUT["stereo output"]
+    FX --> OUT
+```
+
+Solid arrows are the audio path; dotted arrows are control-rate parameter flow.
+
+Partials **sum**. Each is an independent voice dispatched into one accumulation buffer; there is no
+divide-by-count anywhere, and averaging would silently halve every two-partial patch.
+
+## Things that are easy to get wrong
+
+These are all asserted in the test suite, because each one is silent when wrong:
+
+- **Looping is decided by whether a sustain region exists**, not by the descriptor's loop flag — that
+  flag reads zero for piano, so trusting it makes held notes run out as one-shots.
+- **The loop period is inclusive of the data end.** Off by one is inaudible on a long loop and detunes
+  a single-cycle one by 27 cents.
+- **Drums take a different pitch route.** The note selects the kit entry, not the pitch: the tone
+  sounds at key 60 and the kit's coarse plane scales it at *half* strength.
+- **Levels are amplitude-squared** throughout, and `g_amp_curve_hi[0]` is 4 rather than 0, so a level
+  that decays past the floor must be forced to true silence rather than clamped into the table.
+- **The velocity level-scale is split** — one byte for the first two envelope segments, another for
+  the rest. Sharing one makes later segments run about 1.45× too fast.
+
+## Fixed-point
+
+The original's control path is exclusively 16-bit fixed point, and several expressions depend on
+wrapping or on truncation direction. The port uses `int` as the universal intermediate, makes every
+width truncation explicit, and widens to `long` at the three sites where a product exceeds 32 bits —
+the amplitude curve, the part volume, and the filter's exponential decode.
+
+A fourth such site was found by ear rather than by inspection: the chorus tap offset reaches 4.3e10
+and wrapped silently, putting one channel at the wrong delay.

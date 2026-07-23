@@ -38,3 +38,7 @@ obj/
 # Python tooling
 __pycache__/
 *.pyc
+
+# Generated documentation (build with: dotnet docfx docs/docfx.json)
+docs/_site/
+docs/api/

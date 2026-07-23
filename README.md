@@ -55,6 +55,23 @@ different tone numbers and pulls samples from different parts of the ROM.
 `--no-reverb` / `--no-chorus` / `--no-delay` do what they say; the effects are on by default because
 the module always has them.
 
+## Documentation
+
+The API reference and articles are built with [DocFX](https://dotnet.github.io/docfx/), pinned as a
+local tool so the output is reproducible:
+
+```
+dotnet tool restore
+dotnet docfx docs/docfx.json          # writes docs/_site
+dotnet docfx docs/docfx.json --serve  # and previews it at http://localhost:8080
+```
+
+It reads the XML doc comments straight from the library, which are complete — the build treats a
+missing one as an error. Diagrams are Mermaid, rendered by the template.
+
+No Roland data is involved: documentation generation never runs the engine, so it works on a clean
+clone with no DLL present. Pushing to `main` publishes the site via GitHub Actions.
+
 ## Layout
 
 | path | what |
@@ -62,6 +79,7 @@ the module always has them.
 | `src/TabulaSonora` | the library — `Rom`, `Patches`, `Dsp`, `Voices`, `Effects`, `Midi` |
 | `src/TabulaSonora.Tools` | CLI: `render`, `bake-presets`, `extract-tables`, `info` |
 | `tests/TabulaSonora.Tests` | conformance and differential tests |
+| `docs/` | DocFX sources; `docs/_site` and `docs/api` are generated |
 | `tools/*.py` | fixture generators — see below |
 
 ## On the Python

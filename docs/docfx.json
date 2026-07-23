@@ -1,0 +1,48 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "src": "../src/TabulaSonora",
+          "files": [ "TabulaSonora.csproj" ]
+        }
+      ],
+      "dest": "api",
+      "memberLayout": "separatePages",
+      "enumSortOrder": "declaringOrder",
+      "namespaceLayout": "nested",
+      "disableDefaultFilter": false
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": [ "**/*.{md,yml}" ],
+        "exclude": [ "_site/**", "obj/**" ]
+      }
+    ],
+    "resource": [
+      {
+        "files": [ "images/**" ],
+        "exclude": [ "_site/**" ]
+      }
+    ],
+    "output": "_site",
+    "template": [ "default", "modern" ],
+    "globalMetadata": {
+      "_appName": "Tabula Sonora .NET",
+      "_appTitle": "Tabula Sonora .NET",
+      "_appFooter": "Tabula Sonora .NET &mdash; BSD 3-Clause. Roland data is not included; supply your own SCCore.dll.",
+      "_enableSearch": true,
+      "_disableContribution": false,
+      "_gitContribute": {
+        "repo": "https://github.com/TabulaSonora/DotNetAdministravit",
+        "branch": "main"
+      },
+      "pdf": false
+    },
+    "sitemap": {
+      "baseUrl": "https://tabulasonora.github.io/DotNetAdministravit/"
+    }
+  }
+}
