@@ -96,7 +96,7 @@ public sealed class TableSet
         EnvScaleCurve = raw[Names.EnvScaleCurve];
         RateCurve = U16(raw[Names.RateCurve]);
         VelCurve = raw[Names.VelCurve];
-        VelSens = U16(raw[Names.VelSens]);
+        VelSens = raw[Names.VelSens];
         VelXfade = raw[Names.VelXfade];
         EnvShape = U16(raw[Names.EnvShape]);
         EnvStartPhase = U16(raw[Names.EnvStartPhase]);
@@ -235,8 +235,13 @@ public sealed class TableSet
     /// <summary><c>g_vel_curve</c> — 256 entries; velocity response curve.</summary>
     public byte[] VelCurve { get; }
 
-    /// <summary><c>g_vel_sens</c> — 1024 entries; velocity sensitivity curve.</summary>
-    public ushort[] VelSens { get; }
+    /// <summary>
+    /// <c>g_vel_sens</c> — the velocity response curves, 16 rows of 0x80 <em>bytes</em>. Row 0 is the
+    /// identity; the rest bend velocity progressively toward the top of the range. Like
+    /// <see cref="VelXfade"/> the manifest records this as <c>u16</c>, but the engine indexes it
+    /// byte-wise as <c>[(selector &amp; 0xf) * 0x80 + velocity]</c>.
+    /// </summary>
+    public byte[] VelSens { get; }
 
     /// <summary>
     /// <c>g_vel_xfade</c> — the multisample velocity-crossfade curve, 16 rows of 0x80 <em>bytes</em>.

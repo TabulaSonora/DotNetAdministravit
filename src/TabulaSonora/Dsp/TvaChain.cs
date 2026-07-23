@@ -26,6 +26,9 @@ public sealed class TvaChain
     /// </summary>
     public const double AmpScale = 2.0;
 
+    /// <summary>The control-tick rate, which is the grid note-off is acted on.</summary>
+    public const int ControlTickHz = 100;
+
     private readonly ushort[] _levelCurve;
     private readonly ushort[] _ampHigh;
     private readonly ushort[] _ampLow;
@@ -244,7 +247,8 @@ public sealed class TvaChain
             releaseTarget: 0.0,
             releaseSamples: releaseMs / 1000.0 * sampleRate,
             releaseLinear: EnvelopeMachine.IsLinearSegment(raw[0x62]),
-            afterRelease: 0.0);
+            afterRelease: 0.0,
+            controlTickSamples: sampleRate / ControlTickHz);
     }
 
     /// <summary>

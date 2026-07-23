@@ -47,6 +47,7 @@ public sealed class TvfChain
     private readonly ushort[] _qLowPass;
     private readonly ushort[] _qType6;
     private readonly int[] _rampExp;
+    private readonly byte[] _velocitySensitivity;
 
     /// <summary>Creates the chain over a loaded table set.</summary>
     /// <param name="tables">The static tables.</param>
@@ -68,6 +69,7 @@ public sealed class TvfChain
         _qLowPass = tables.TvfQLp;
         _qType6 = tables.TvfQT6;
         _rampExp = tables.RampExp;
+        _velocitySensitivity = tables.VelSens;
     }
 
     /// <summary>
@@ -201,6 +203,29 @@ public sealed class TvfChain
     }
 
     /// <summary>
+    /// The velocity the filter envelope's depth actually responds to.
+    /// </summary>
+    /// <param name="partial">The partial's parameter block.</param>
+    /// <param name="velocity">MIDI velocity.</param>
+    /// <returns>The velocity after the patch's own response curve.</returns>
+    /// <remarks>
+    /// <para>
+    /// Velocity does not reach the depth scaler raw: <c>block[0x2e]</c> picks one of sixteen response
+    /// curves first. Row 0 is the identity, so the majority of the library is unaffected — Trumpet
+    /// selects it and is exact either way. Brass 1 selects row 1, which reads velocity 100 as 71.
+    /// </para>
+    /// <para>
+    /// Measured against the engine's own <c>+0xec</c> envelope register across four programs and three
+    /// velocities: every point matches the curve indexed by <c>block[0x2e]</c>, and program 4
+    /// discriminates it from <c>block[0x57]</c>, the other byte that fit the first two patches. Using
+    /// raw velocity leaves Brass 1's filter about a third of an octave too open for the whole note,
+    /// which measures as +3.5 dB at 4–8 kHz and +6.3 dB above it.
+    /// </para>
+    /// </remarks>
+    public int EffectiveVelocity(PartialParameters partial, int velocity) =>
+        _velocitySensitivity[(partial.VelocityCurve * 0x80) + Math.Clamp(velocity, 0, 0x7F)];
+
+    /// <summary>
     /// The envelope's peak and its five stage offsets, in cutoff units relative to that peak.
     /// </summary>
     /// <param name="partial">The partial's parameter block.</param>
@@ -237,7 +262,7 @@ public sealed class TvfChain
         }
         else
         {
-            var s = 0x7F - Math.Min(127, velocity);
+            var s = 0x7F - EffectiveVelocity(partial, velocity);
             c0 = resonanceScale < 0
                 ? (_resoCurve[Math.Abs(resonanceScale) & 0x3F] * s) - 0x7FFF
                 : 0x7FFF - (_resoCurve[resonanceScale & 0x3F] * s);
@@ -337,7 +362,8 @@ public sealed class TvfChain
             releaseTarget: release,
             releaseSamples: Math.Max(releaseMs / 1000.0 * sampleRate, 1e-9),
             releaseLinear: true,
-            afterRelease: release);
+            afterRelease: release,
+            controlTickSamples: sampleRate / TvaChain.ControlTickHz);
 
         // Stage B: the part-level cutoff terms cancel at neutral, so only the base and envelope remain.
         return (envelope, Math.Min(0x7FFF, (raw[0x2F] * 0x100) + peak));

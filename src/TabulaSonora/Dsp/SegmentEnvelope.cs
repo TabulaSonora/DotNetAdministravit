@@ -34,6 +34,7 @@ public sealed class SegmentEnvelope
     private readonly double _releaseSpan;
     private readonly long _releaseSamples;
     private readonly double _afterRelease;
+    private readonly long _controlTick;
 
     private long _noteOff = -1;
     private double _atNoteOff;
@@ -47,6 +48,11 @@ public sealed class SegmentEnvelope
     /// <param name="releaseSamples">The release duration, in samples.</param>
     /// <param name="releaseLinear">Whether the release interpolates linearly.</param>
     /// <param name="afterRelease">The value held once the release has finished.</param>
+    /// <param name="controlTickSamples">
+    /// The control tick in samples — the grid note-off is acted on. A tick of one releases at the note
+    /// after note-off, which is as close to releasing immediately as this gets and is <em>not</em> what
+    /// the engine does; see <see cref="NoteOff"/>.
+    /// </param>
     /// <exception cref="ArgumentException">A parameter array is not four long.</exception>
     public SegmentEnvelope(
         EnvelopeMachine machine,
@@ -56,7 +62,8 @@ public sealed class SegmentEnvelope
         double releaseTarget,
         double releaseSamples,
         bool releaseLinear,
-        double afterRelease)
+        double afterRelease,
+        long controlTickSamples)
     {
         ArgumentNullException.ThrowIfNull(machine);
 
@@ -71,6 +78,7 @@ public sealed class SegmentEnvelope
         _releaseSpan = releaseSamples;
         _releaseSamples = Math.Max(1, (long)releaseSamples);
         _afterRelease = afterRelease;
+        _controlTick = Math.Max(1, controlTickSamples);
 
         // Boundaries are accumulated in samples rather than per segment, so a run of short segments
         // cannot drift against the position a sample index falls at.
@@ -97,8 +105,23 @@ public sealed class SegmentEnvelope
     /// </summary>
     /// <param name="sample">Sample index of note-off, relative to note-on.</param>
     /// <remarks>
+    /// <para>
     /// The release departs from the value the envelope had reached, not from a segment target, which
     /// is what makes a note released mid-attack decay from where it actually was.
+    /// </para>
+    /// <para>
+    /// Note-off does not take effect at the sample it lands on: the engine sees it at its next control
+    /// tick, so the envelope holds for the rest of the current tick first. Measured by sweeping the
+    /// hold time past a tick boundary — note-off anywhere in 1000–1008 ms produced the same release,
+    /// which then stepped a whole tick later at 1010 ms. Releasing immediately instead runs the tail
+    /// 0–10 ms early; that is inaudible on a pad but a large fraction of a short release, and the
+    /// Accordion reaches −20 dB in 9 ms against the engine's 23 ms.
+    /// </para>
+    /// <para>
+    /// The grid is the voice's own, since a voice starts its control tick at note-on. The pitch
+    /// envelope already behaves this way for free — it is only stepped from the control tick — so
+    /// this is what puts the amplitude and cutoff envelopes back on the same grid as it.
+    /// </para>
     /// </remarks>
     public void NoteOff(long sample)
     {
@@ -107,8 +130,28 @@ public sealed class SegmentEnvelope
             return;
         }
 
-        _atNoteOff = Held(Math.Max(0, sample - 1));
-        _noteOff = sample;
+        var deferred = DeferToControlTick(sample, _controlTick);
+
+        _atNoteOff = Held(Math.Max(0, deferred - 1));
+        _noteOff = deferred;
+    }
+
+    /// <summary>
+    /// The control tick an event landing at a sample is acted on.
+    /// </summary>
+    /// <param name="sample">Sample the event landed at.</param>
+    /// <param name="controlTickSamples">The control tick, in samples.</param>
+    /// <returns>The sample the engine would act on it at.</returns>
+    /// <remarks>
+    /// The <em>following</em> tick, even when the event lands exactly on a boundary: that tick's
+    /// update has already run by the time the event is latched. Measured on the DLL — a note-off at
+    /// 1010 ms, exactly a tick, released at 1020 ms, while one at 1008 ms released at 1010 ms. So the
+    /// deferral spans one full tick and is never zero.
+    /// </remarks>
+    public static long DeferToControlTick(long sample, long controlTickSamples)
+    {
+        var tick = Math.Max(1, controlTickSamples);
+        return (Math.Max(0, sample) / tick * tick) + tick;
     }
 
     /// <summary>The envelope's value at a sample position.</summary>

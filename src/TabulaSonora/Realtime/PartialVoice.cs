@@ -157,7 +157,9 @@ internal sealed class PartialVoice
             return;
         }
 
-        _noteOff = _sample;
+        // Deferred to the tick the engine would act on, so the pitch envelope — which reads this flag,
+        // and only from the control tick — releases on the same one as the amplitude and cutoff.
+        _noteOff = SegmentEnvelope.DeferToControlTick(_sample, ToneGenerator.ControlBlock);
         _amplitude?.NoteOff(_sample);
         _cutoff?.NoteOff(_sample);
     }

@@ -75,6 +75,15 @@ public readonly struct PartialParameters : IEquatable<PartialParameters>
     /// <summary>TVF filter type selector. Block +0x31.</summary>
     public int FilterType => _source[_offset + 0x31];
 
+    /// <summary>
+    /// Velocity response curve selector for the filter envelope's depth; low nibble only. Block +0x2e.
+    /// </summary>
+    /// <remarks>
+    /// Row 0 is the identity, so a patch that leaves this at zero sees raw MIDI velocity. Roughly a
+    /// quarter of the library does not: Brass 1 selects row 1, which maps velocity 100 to 71.
+    /// </remarks>
+    public int VelocityCurve => _source[_offset + 0x2E] & 0x0F;
+
     /// <summary>Velocity-crossfade curve selector; only the low nibble is used. Block +0x4e.</summary>
     public int VelocityCrossfadeCurve => _source[_offset + 0x4E] & 0x0F;
 

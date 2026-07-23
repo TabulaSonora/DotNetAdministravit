@@ -23,6 +23,23 @@ namespace TabulaSonora.Tests;
 /// over a kilohertz. This port follows the hardware instead, which leaves a small, bounded
 /// divergence from the reference on looped waves and none at all elsewhere.
 /// </para>
+/// <para>
+/// The third is the filter's velocity response. The reference feeds raw MIDI velocity to the filter
+/// envelope's depth scaler; the engine feeds it through the curve <c>block[0x2e]</c> selects (see
+/// <see cref="Dsp.TvfChain.EffectiveVelocity"/>). Of the melodic fixtures only Piano 1 at note 60
+/// selects a non-identity curve, and it is held to its own correlation floor below. Brass 1, which is
+/// not a fixture, is the patch that showed why this matters: on raw velocity its filter sat about a
+/// third of an octave too open, measuring +3.5 dB at 4–8 kHz and +6.3 dB above it against the DLL.
+/// </para>
+/// <para>
+/// The second deliberate divergence is the release. The reference starts it at the note-off sample;
+/// the engine only acts on note-off at its next control tick, so this port holds for the rest of that
+/// tick first (see <see cref="Dsp.SegmentEnvelope.NoteOff"/>). That is worth up to 10 ms, which is
+/// nothing on a pad and most of the tail on a short release. The comparison is therefore split at
+/// note-off: everything up to it must still match the reference sample for sample, and the release is
+/// held to its own tolerances. Measured against the DLL, the deferral takes the release-onset error
+/// from about 6 ms to about 2 ms and improves the tail correlation on every patch tried.
+/// </para>
 /// </remarks>
 public class VoiceRenderTests
 {
@@ -34,6 +51,36 @@ public class VoiceRenderTests
 
     /// <summary>Bound on any single sample's divergence, which the loop-end fix keeps small.</summary>
     private const double MaximumDivergence = 0.05;
+
+    /// <summary>
+    /// Correlation floor across the release, where the reference is up to a control tick ahead.
+    /// </summary>
+    /// <remarks>The worst of the six melodic fixtures is the Flute at 0.9931, whose whole release is
+    /// only a few ticks long; the rest sit above 0.997.</remarks>
+    private const double ReleaseCorrelation = 0.99;
+
+    /// <summary>
+    /// How far the release's level may run above the reference's.
+    /// </summary>
+    /// <remarks>
+    /// One-sided by construction: holding for the rest of the tick can only leave this port with more
+    /// energy in the release than the reference, never less. The Flute is again the extreme at 1.31.
+    /// </remarks>
+    private const double ReleaseLevelExcess = 0.4;
+
+    /// <summary>
+    /// Correlation floor for a fixture whose filter takes a non-identity velocity response curve,
+    /// which the reference does not apply.
+    /// </summary>
+    /// <remarks>
+    /// Only Piano 1 at note 60 qualifies, at 0.9885. The divergence is spectral — the filter sits
+    /// somewhere else for the whole note — which also moves the overall level a little, by 0.27% here,
+    /// so <see cref="VelocityCurveLevelTolerance"/> applies alongside it.
+    /// </remarks>
+    private const double VelocityCurveCorrelation = 0.98;
+
+    /// <summary>Level tolerance for those same notes, where a moved filter shifts the level slightly.</summary>
+    private const double VelocityCurveLevelTolerance = 0.01;
 
     private static NoteRenderer? _renderer;
 
@@ -89,7 +136,12 @@ public class VoiceRenderTests
             var voice = renderer.RenderNote(program, note, velocity, hold, tailSeconds: 1.8);
 
             Assert.Equal(expectedName, voice.Name);
-            AssertMatches(expected, voice, $"program {program} note {note}");
+
+            var curved = UsesVelocityCurve(renderer, program, note, velocity);
+            AssertMatches(expected, voice, $"program {program} note {note}",
+                noteOffFrame: (int)(hold * NoteRenderer.SampleRate),
+                heldCorrelation: curved ? VelocityCurveCorrelation : MinimumCorrelation,
+                heldLevelTolerance: curved ? VelocityCurveLevelTolerance : LevelTolerance);
             checkedNotes++;
         }
 
@@ -172,47 +224,118 @@ public class VoiceRenderTests
         Assert.All(voice.Right, s => Assert.Equal(0f, s));
     }
 
-    private static void AssertMatches(float[] expected, RenderedNote voice, string what)
+    /// <summary>Correlation, level ratio and worst single-sample error over a frame range.</summary>
+    private readonly record struct Comparison(double Correlation, double LevelRatio, double Worst, int WorstFrame);
+
+    /// <summary>
+    /// Compares a rendered note against the reference, splitting the comparison at note-off.
+    /// </summary>
+    /// <param name="expected">The reference render, interleaved.</param>
+    /// <param name="voice">What this port produced.</param>
+    /// <param name="what">Label for the failure message.</param>
+    /// <param name="noteOffFrame">
+    /// Frame the note was released at, or −1 for a render with no note-off of its own — a drum, whose
+    /// ring the renderer ends on its own terms.
+    /// </param>
+    /// <summary>
+    /// Whether any partial this note sounds takes a filter velocity curve the reference does not model.
+    /// </summary>
+    /// <param name="renderer">The shared renderer.</param>
+    /// <param name="program">MIDI program.</param>
+    /// <param name="note">MIDI note.</param>
+    /// <param name="velocity">MIDI velocity.</param>
+    /// <returns>Whether the reference is expected to diverge on this note.</returns>
+    private static bool UsesVelocityCurve(NoteRenderer renderer, int program, int note, int velocity)
+    {
+        var directory = renderer.Directory;
+        foreach (var tone in directory.ProgramTones(program, ToneMap.Sc8820, bank: 0))
+        {
+            foreach (var sounding in directory.Resolve(tone, note, velocity).Partials)
+            {
+                var partial = directory.GetPartialBySlot(tone, sounding.PartialIndex);
+
+                // A neutral 0x4a bypasses the scaler, so the curve cannot reach the output there.
+                if (partial.Raw[0x4A] != 0x40
+                    && renderer.Tvf.EffectiveVelocity(partial, velocity) != Math.Clamp(velocity, 0, 0x7F))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static void AssertMatches(
+        float[] expected, RenderedNote voice, string what, int noteOffFrame = -1,
+        double heldCorrelation = MinimumCorrelation,
+        double heldLevelTolerance = LevelTolerance)
     {
         var frames = Math.Min(expected.Length / 2, voice.Left.Length);
         Assert.True(frames > 0, $"{what}: nothing rendered.");
 
-        var worst = 0.0;
-        var worstIndex = -1;
-        double ours = 0, theirs = 0, cross = 0;
-
-        for (var i = 0; i < frames; i++)
+        Comparison Compare(int from, int to)
         {
-            for (var channel = 0; channel < 2; channel++)
+            var worst = 0.0;
+            var worstFrame = -1;
+            double ours = 0, theirs = 0, cross = 0;
+
+            for (var i = from; i < to; i++)
             {
-                double a = channel == 0 ? voice.Left[i] : voice.Right[i];
-                double b = expected[(i * 2) + channel];
-
-                var error = Math.Abs(a - b);
-                if (error > worst)
+                for (var channel = 0; channel < 2; channel++)
                 {
-                    worst = error;
-                    worstIndex = i;
-                }
+                    double a = channel == 0 ? voice.Left[i] : voice.Right[i];
+                    double b = expected[(i * 2) + channel];
 
-                ours += a * a;
-                theirs += b * b;
-                cross += a * b;
+                    var error = Math.Abs(a - b);
+                    if (error > worst)
+                    {
+                        worst = error;
+                        worstFrame = i;
+                    }
+
+                    ours += a * a;
+                    theirs += b * b;
+                    cross += a * b;
+                }
             }
+
+            Assert.True(ours > 1e-9, $"{what}: rendered silence, so the comparison proves nothing.");
+            return new Comparison(cross / Math.Sqrt(ours * theirs), Math.Sqrt(ours / theirs), worst, worstFrame);
         }
 
-        Assert.True(ours > 1e-9, $"{what}: rendered silence, so the comparison proves nothing.");
+        // Held: still exact, bar the loop-end difference. Everything the release change touches is
+        // after note-off, so a regression here means something else moved.
+        var held = noteOffFrame is >= 0 && noteOffFrame < frames ? noteOffFrame : frames;
+        var sustain = Compare(0, held);
 
-        var correlation = cross / Math.Sqrt(ours * theirs);
-        var levelRatio = Math.Sqrt(ours / theirs);
+        Assert.True(sustain.Correlation >= heldCorrelation,
+            $"{what}: correlation {sustain.Correlation:F6} against the reference before note-off.");
+        Assert.True(Math.Abs(sustain.LevelRatio - 1.0) < heldLevelTolerance,
+            $"{what}: level ratio {sustain.LevelRatio:F6} against the reference before note-off.");
+        Assert.True(sustain.Worst < MaximumDivergence,
+            $"{what}: worst sample divergence {sustain.Worst:F5} at frame {sustain.WorstFrame}, which " +
+            "is larger than the loop-end difference alone can explain.");
 
-        Assert.True(correlation >= MinimumCorrelation,
-            $"{what}: correlation {correlation:F6} against the reference.");
-        Assert.True(Math.Abs(levelRatio - 1.0) < LevelTolerance,
-            $"{what}: level ratio {levelRatio:F6} against the reference.");
-        Assert.True(worst < MaximumDivergence,
-            $"{what}: worst sample divergence {worst:F5} at frame {worstIndex}, which is larger " +
-            "than the loop-end difference alone can explain.");
+        if (held >= frames)
+        {
+            return;
+        }
+
+        // Release: the reference starts it up to a control tick early, so this window is held to its
+        // own tolerances. The excess is one-sided -- more energy here than the reference, never less.
+        var release = Compare(held, frames);
+
+        Assert.True(release.Correlation >= ReleaseCorrelation,
+            $"{what}: correlation {release.Correlation:F6} across the release.");
+        Assert.True(release.LevelRatio > 1.0 - LevelTolerance,
+            $"{what}: level ratio {release.LevelRatio:F6} across the release is below the reference's, " +
+            "but deferring note-off can only add energy there.");
+        Assert.True(release.LevelRatio - 1.0 < ReleaseLevelExcess,
+            $"{what}: level ratio {release.LevelRatio:F6} across the release is further above the " +
+            "reference than one control tick of extra hold can explain.");
+        Assert.True(release.Worst < MaximumDivergence,
+            $"{what}: worst sample divergence {release.Worst:F5} at frame {release.WorstFrame} in the release.");
     }
 
     private static float[] LoadFixture(string name)
