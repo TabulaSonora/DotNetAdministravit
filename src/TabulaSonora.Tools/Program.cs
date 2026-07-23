@@ -15,7 +15,7 @@ try
         "info" => Info(args.AsSpan(1)),
         "dump-effect" => DumpEffect(args.AsSpan(1)),
         "render" => Render(args.AsSpan(1)),
-        "bake-presets" => BakePresets(args.AsSpan(1)),
+        "prepare" => Prepare(args.AsSpan(1)),
         "render-note" => RenderNote(args.AsSpan(1)),
         _ => Fail($"Unknown command '{args[0]}'."),
     };
@@ -39,18 +39,24 @@ static void Usage()
     Console.WriteLine("""
         tabula-sonora - tooling for the Tabula Sonora engine
 
-          extract-tables <SCCore.dll> <output-directory>
-              Verify the DLL is the pinned build, then write all 48 static tables as
-              byte-for-byte .bin slices. Equivalent to the spec repo's extract_tables.py.
+          prepare <SCCore.dll> [--presets <path>] [--tables <directory>]
+              Everything the engine needs, from one DLL. Verifies the build, reads the
+              delay presets, harvests the reverb and chorus coefficients, and writes
+              presets.json. This is the only setup step; run it once.
+
+          render <SCCore.dll> <input.mid> <output.wav> [options]
+              Render a MIDI file. Run with no options for the list.
 
           info <SCCore.dll>
               Print the build identity and the wave-ROM block map.
 
-          bake-presets <SCCore.dll> <tables-directory> <output.json>
-              Build the effect preset file from the DLL and the scdec revdump/chodump
-              coefficient dumps. These are Roland-derived, so they are generated locally
-              and never redistributed; the library looks for presets.json beside itself,
-              or wherever TABULASONORA_PRESETS points.
+          extract-tables <SCCore.dll> <output-directory>
+              Write the 48 static tables as byte-for-byte .bin slices. The library reads
+              them from the DLL directly, so this is only for tests and inspection.
+
+        Everything derived from the DLL is Roland's and is generated locally, never
+        redistributed. The library looks for presets.json beside itself, or wherever
+        TABULASONORA_PRESETS points.
         """);
 }
 
@@ -220,15 +226,49 @@ static TabulaSonora.ChannelMask WithChannels(TabulaSonora.ChannelMask? mask, str
     return mask;
 }
 
-static int BakePresets(ReadOnlySpan<string> args)
+static int Prepare(ReadOnlySpan<string> args)
 {
-    if (args.Length != 3)
+    if (args.Length == 0)
     {
-        return Fail("bake-presets <SCCore.dll> <tables-directory> <output.json>");
+        TabulaSonora.Tools.Preparer.Explain(Console.WriteLine);
+        Console.WriteLine();
+        return Fail("prepare <SCCore.dll> [--presets <path>] [--tables <directory>]");
     }
 
-    Console.WriteLine(TabulaSonora.Tools.PresetBaker.Bake(args[0], args[1], args[2]));
-    return 0;
+    var dllPath = args[0];
+
+    // Default beside the library sources, which the build copies to every output directory.
+    var presetsPath = Path.Combine(FindRepositoryRoot(), "src", "TabulaSonora", "Effects", "presets.json");
+    string? tablesDirectory = null;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--presets": presetsPath = args[++i]; break;
+            case "--tables": tablesDirectory = args[++i]; break;
+            default: return Fail($"Unknown option '{args[i]}'.");
+        }
+    }
+
+    return TabulaSonora.Tools.Preparer.Prepare(dllPath, presetsPath, tablesDirectory, Console.WriteLine);
+}
+
+/// <summary>Walks up from the executable to the repository root, falling back to the current directory.</summary>
+static string FindRepositoryRoot()
+{
+    var directory = new DirectoryInfo(AppContext.BaseDirectory);
+    while (directory is not null)
+    {
+        if (File.Exists(Path.Combine(directory.FullName, "DotNetAdministravitTabulaSonora.slnx")))
+        {
+            return directory.FullName;
+        }
+
+        directory = directory.Parent;
+    }
+
+    return Directory.GetCurrentDirectory();
 }
 
 static int RenderNote(ReadOnlySpan<string> args)

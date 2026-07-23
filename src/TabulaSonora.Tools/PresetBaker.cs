@@ -1,34 +1,20 @@
-using System.Globalization;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using TabulaSonora.Rom;
 
 namespace TabulaSonora.Tools;
 
 /// <summary>
-/// Builds the effect preset file from a local <c>SCCore.dll</c> and the coefficient dumps taken
-/// from it.
+/// Assembles the effect preset file: the delay presets read from the DLL, the GS conversion tables,
+/// and the reverb and chorus coefficients harvested from a live engine.
 /// </summary>
-/// <remarks>
-/// <para>
-/// The reverb and chorus coefficients come from <c>scdec revdump</c> / <c>chodump</c>, which read
-/// the engine's own runtime state; the delay presets are read straight out of the DLL. All of it is
-/// Roland's, so it is generated locally and never redistributed.
-/// </para>
-/// <para>
-/// This replaces the Python generator that previously did the same job, so nothing in the build or
-/// run path needs Python.
-/// </para>
-/// </remarks>
-public static partial class PresetBaker
+public static class PresetBaker
 {
     /// <summary>
     /// File offset of <c>g_delay_preset_tbl</c>.
     /// </summary>
     /// <remarks>
     /// Documented at virtual address <c>0x181893930</c>; this region takes the same −0x1000 section
-    /// adjustment as the <c>.rdata</c> curve tables, which was confirmed by locating the table's
-    /// bytes in the file.
+    /// adjustment as the <c>.rdata</c> curve tables, confirmed by locating the table's bytes.
     /// </remarks>
     public const long DelayPresetOffset = 0x1892930;
 
@@ -38,20 +24,20 @@ public static partial class PresetBaker
     /// <summary>Bytes per delay preset row.</summary>
     public const int DelayPresetStride = 10;
 
-    private static readonly string[] ReverbTypeNames =
+    /// <summary>The eight GS reverb macro names.</summary>
+    public static readonly string[] ReverbTypeNames =
         ["Room1", "Room2", "Room3", "Hall1", "Hall2", "Plate", "Delay", "PanDelay"];
 
-    private static readonly string[] ChorusTypeNames =
+    /// <summary>The eight GS chorus macro names.</summary>
+    public static readonly string[] ChorusTypeNames =
         ["Chorus1", "Chorus2", "Chorus3", "Chorus4", "FeedbackChorus", "Flanger", "ShortDelay", "ShortDelayFB"];
 
-    private static readonly string[] DelayTypeNames =
+    /// <summary>The ten GS delay macro names.</summary>
+    public static readonly string[] DelayTypeNames =
     [
         "Delay1", "Delay2", "Delay3", "Delay4", "PanDelay1",
         "PanDelay2", "PanDelay3", "PanDelay4", "DelayToReverb", "PanRepeat",
     ];
-
-    private static readonly string[] TankTapNames =
-        ["tap10", "tap14", "tap18", "tap1C", "tap20", "tap24", "tap28", "tap2C"];
 
     /// <summary>
     /// Roland's DELAY TIME CENTER conversion, raw 1–115 to milliseconds.
@@ -82,39 +68,57 @@ public static partial class PresetBaker
         421, 425, 429, 433, 438, 442, 446, 450, 454, 458, 463, 467, 471, 475, 479, 483, 488, 492, 496, 500,
     ];
 
-    /// <summary>Builds the preset file.</summary>
-    /// <param name="dllPath">Path to the pinned <c>SCCore.dll</c>.</param>
-    /// <param name="tablesDirectory">Directory holding the <c>scdec</c> reverb and chorus dumps.</param>
-    /// <param name="outputPath">Where to write the JSON.</param>
-    /// <returns>A one-line summary of what was written.</returns>
-    public static string Bake(string dllPath, string tablesDirectory, string outputPath)
+    /// <summary>Reads the ten GS delay presets out of the DLL.</summary>
+    /// <param name="rom">An open ROM image.</param>
+    /// <returns>Ten rows of ten raw parameters.</returns>
+    /// <exception cref="InvalidDataException">The table does not look like the expected presets.</exception>
+    public static int[][] ReadDelayPresets(RomImage rom)
     {
-        ArgumentException.ThrowIfNullOrEmpty(dllPath);
-        ArgumentException.ThrowIfNullOrEmpty(tablesDirectory);
+        ArgumentNullException.ThrowIfNull(rom);
+
+        var bytes = rom.Read(DelayPresetOffset, DelayTypeCount * DelayPresetStride);
+        var presets = new int[DelayTypeCount][];
+
+        for (var t = 0; t < DelayTypeCount; t++)
+        {
+            presets[t] = new int[DelayPresetStride];
+            for (var i = 0; i < DelayPresetStride; i++)
+            {
+                presets[t][i] = bytes[(t * DelayPresetStride) + i];
+            }
+        }
+
+        // A wrong offset would silently produce plausible junk, so check a known row.
+        if (presets[0][1] != 97 || presets[0][4] != 127 || presets[0][8] != 80)
+        {
+            throw new InvalidDataException(
+                $"Delay preset table at 0x{DelayPresetOffset:x} does not look right " +
+                $"(first row [{string.Join(",", presets[0])}]).");
+        }
+
+        return presets;
+    }
+
+    /// <summary>Writes the preset file.</summary>
+    /// <param name="outputPath">Destination path.</param>
+    /// <param name="reverbDefault">The GM power-on reverb.</param>
+    /// <param name="reverb">One coefficient set per GS reverb type.</param>
+    /// <param name="chorusDefault">The GM power-on chorus.</param>
+    /// <param name="chorus">One coefficient set per GS chorus type.</param>
+    /// <param name="delayPresets">The raw delay preset rows.</param>
+    public static void Write(
+        string outputPath,
+        object reverbDefault,
+        object[] reverb,
+        object chorusDefault,
+        object[] chorus,
+        int[][] delayPresets)
+    {
         ArgumentException.ThrowIfNullOrEmpty(outputPath);
-
-        var reverb = new object[ReverbTypeNames.Length];
-        for (var t = 0; t < ReverbTypeNames.Length; t++)
-        {
-            reverb[t] = ParseReverb(ReadDump(tablesDirectory, $"reverb_type_{t}_{ReverbTypeNames[t]}.txt"));
-        }
-
-        var chorus = new object[ChorusTypeNames.Length];
-        for (var t = 0; t < ChorusTypeNames.Length; t++)
-        {
-            chorus[t] = ParseChorus(ReadDump(tablesDirectory, $"chorus_type_{t}_{ChorusTypeNames[t]}.txt"));
-        }
-
-        var reverbDefault = ParseReverb(ReadDump(tablesDirectory, "reverb_gm_default.txt"));
-        var chorusDefault = ParseChorus(ReadDump(tablesDirectory, "chorus_gm_default.txt"));
-
-        using var rom = RomImage.Open(dllPath, RomVerification.Full);
-        var delayPresets = ReadDelayPresets(rom);
 
         var document = new
         {
-            _note = "Reverb and chorus coefficients dumped from a live SCCore.dll via scdec revdump/" +
-                    "chodump; delay presets read from the DLL's own preset table. Roland-derived: " +
+            _note = "Derived from a licensed SCCore.dll by 'tabula-sonora prepare'. Roland-derived: " +
                     "generate locally, do not redistribute.",
             reverb = new { typeNames = ReverbTypeNames, @default = reverbDefault, types = reverb },
             chorus = new { typeNames = ChorusTypeNames, @default = chorusDefault, types = chorus },
@@ -135,170 +139,5 @@ public static partial class PresetBaker
 
         File.WriteAllText(outputPath,
             JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = true }));
-
-        return $"wrote {outputPath}: {new FileInfo(outputPath).Length:N0} bytes " +
-               $"({reverb.Length} reverb, {chorus.Length} chorus, {delayPresets.Length} delay types)";
     }
-
-    private static int[][] ReadDelayPresets(RomImage rom)
-    {
-        var bytes = rom.Read(DelayPresetOffset, DelayTypeCount * DelayPresetStride);
-        var presets = new int[DelayTypeCount][];
-
-        for (var t = 0; t < DelayTypeCount; t++)
-        {
-            presets[t] = new int[DelayPresetStride];
-            for (var i = 0; i < DelayPresetStride; i++)
-            {
-                presets[t][i] = bytes[(t * DelayPresetStride) + i];
-            }
-        }
-
-        // The first row is quoted in the notes; a wrong offset would silently produce plausible junk.
-        if (presets[0][1] != 97 || presets[0][4] != 127 || presets[0][8] != 80)
-        {
-            throw new InvalidDataException(
-                $"Delay preset table at 0x{DelayPresetOffset:x} does not look right " +
-                $"(first row [{string.Join(",", presets[0])}]).");
-        }
-
-        return presets;
-    }
-
-    private static string ReadDump(string directory, string name)
-    {
-        var path = Path.Combine(directory, name);
-        if (!File.Exists(path))
-        {
-            throw new FileNotFoundException(
-                $"Coefficient dump '{name}' not found in '{directory}'. Produce it with " +
-                $"'scdec <SCCore.dll> revdump|chodump'.", path);
-        }
-
-        return File.ReadAllText(path);
-    }
-
-    private static object ParseReverb(string text)
-    {
-        var diffusers = new object[4];
-        for (var i = 0; i < 4; i++)
-        {
-            diffusers[i] = ParseAllpass(Line(text, $"ap{i}"));
-        }
-
-        return new
-        {
-            diffusers,
-            tankA = ParseTank(Line(text, "LA")),
-            tankB = ParseTank(Line(text, "LB")),
-            tankAllpasses = new
-            {
-                A0 = ParseAllpass(Line(text, "LA.sA0")),
-                A1 = ParseAllpass(Line(text, "LA.sA1")),
-                B0 = ParseAllpass(Line(text, "LB.sA0")),
-                B1 = ParseAllpass(Line(text, "LB.sA1")),
-            },
-            injectionTap = Hex(Match(text, @"injTap=([0-9A-Fa-f]+)")),
-            dampFeedback = Real(text, @"aa8_fb=(\S+)"),
-            dampInput = Real(text, @"aac_in=(\S+)"),
-            gainInput = Real(text, @"ed70_in=(\S+)"),
-            gainInjection = Real(text, @"ee70_inj=(\S+)"),
-            gainFeedback = Real(text, @"eef0_fb=(\S+)"),
-            gainOutput = Real(text, @"edf0_out=(\S+)"),
-        };
-    }
-
-    private static object ParseAllpass(string line) => new
-    {
-        writeTap = Hex(Match(line, @"writeTap=([0-9A-Fa-f]+)")),
-        readTap = Hex(Match(line, @"readTap=([0-9A-Fa-f]+)")),
-        coefA = Real(line, @"coefA=(\S+)"),
-        coefB = Real(line, @"coefB=(\S+)"),
-    };
-
-    private static object ParseTank(string line)
-    {
-        var taps = new Dictionary<string, int>(TankTapNames.Length, StringComparer.Ordinal);
-        foreach (var name in TankTapNames)
-        {
-            taps[name] = Hex(Match(line, $@"{name}=([0-9A-Fa-f]+)"));
-        }
-
-        return new { taps, coefA = Real(line, @"cA=(\S+)"), coefB = Real(line, @"cB=(\S+)") };
-    }
-
-    private static object ParseChorus(string text)
-    {
-        // Only the first snapshot is needed, and the right-hand stage is gated off for every GS type.
-        var snapshotB = text.IndexOf("# snapshot B", StringComparison.Ordinal);
-        if (snapshotB >= 0)
-        {
-            text = text[..snapshotB];
-        }
-
-        // These prefixes run straight into their first field ("L lfoPhase="), so no word boundary.
-        var lfo = Line(text, "L lfo", wordBoundary: false);
-        var taps = Line(text, "L tap1", wordBoundary: false);
-        var gains = Line(text, "L gains", wordBoundary: false);
-
-        return new
-        {
-            lfoIncrement = Integer(lfo, @"lfoInc=(-?\d+)"),
-            lpfA = Real(lfo, @"lpfA=(\S+)"),
-            lpfB = Real(lfo, @"lpfB=(\S+)"),
-            tap1Depth = Integer(taps, @"tap1 depth=(-?\d+)"),
-            tap1Base = Integer(taps, @"tap1 depth=-?\d+ base=(-?\d+)"),
-            tap2Depth = Integer(taps, @"tap2 depth=(-?\d+)"),
-            tap2Base = Integer(taps, @"tap2 depth=-?\d+ base=(-?\d+)"),
-            feedback = Real(taps, @"fbCoef=(\S+)"),
-            gainWrite = Real(gains, @"writeIn=(\S+)"),
-            gainTap = Real(gains, @"tapOut=(\S+)"),
-        };
-    }
-
-    /// <summary>Finds the line starting with a prefix.</summary>
-    /// <param name="text">The dump.</param>
-    /// <param name="prefix">Prefix to look for.</param>
-    /// <param name="wordBoundary">
-    /// Require a space or end of line after the prefix. Needed for the reverb tanks, where
-    /// <c>LA</c> must not match <c>LA.sA0</c>.
-    /// </param>
-    /// <returns>The matching line.</returns>
-    private static string Line(string text, string prefix, bool wordBoundary = true)
-    {
-        foreach (var line in text.Split('\n'))
-        {
-            var trimmed = line.TrimEnd('\r');
-            if (!trimmed.StartsWith(prefix, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (!wordBoundary || trimmed.Length == prefix.Length || trimmed[prefix.Length] == ' ')
-            {
-                return trimmed;
-            }
-        }
-
-        throw new InvalidDataException($"No '{prefix}' line in the dump.");
-    }
-
-    private static string Match(string text, string pattern)
-    {
-        var match = Regex.Match(text, pattern, RegexOptions.None, TimeSpan.FromSeconds(1));
-        if (!match.Success)
-        {
-            throw new InvalidDataException($"Pattern '{pattern}' not found in the dump.");
-        }
-
-        return match.Groups[1].Value;
-    }
-
-    private static int Hex(string value) => int.Parse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-
-    private static int Integer(string text, string pattern) =>
-        int.Parse(Match(text, pattern), CultureInfo.InvariantCulture);
-
-    private static double Real(string text, string pattern) =>
-        double.Parse(Match(text, pattern), NumberStyles.Float, CultureInfo.InvariantCulture);
 }

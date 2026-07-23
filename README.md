@@ -29,22 +29,41 @@ A different build moves every table offset, so `RomImage` refuses to open one.
 
 ## Getting it running
 
+Two commands. Nothing else is needed — no other repository, no Python.
+
 ```
 dotnet build -c Release
 
-# One-time: build the effect coefficients from your own DLL.
-# The reverb/chorus dumps come from the spec repo's scdec harness (scdec revdump / chodump).
+# One-time setup: everything the engine needs, from the DLL alone.
 dotnet run -c Release --project src/TabulaSonora.Tools -- \
-    bake-presets "<path>/SCCore.dll" "<spec-repo>/tables" src/TabulaSonora/Effects/presets.json
+    prepare "<path>/SCCore.dll" --tables tables
 
 # Render.
 dotnet run -c Release --project src/TabulaSonora.Tools -- \
     render "<path>/SCCore.dll" song.mid out.wav --map 4
 ```
 
-`presets.json` is copied next to the assembly at build time. The library also honours
-`TABULASONORA_PRESETS`, or a host can call `EffectPresets.Use(...)` directly. Without it, the first
-effect render fails with a message saying how to build it.
+`prepare` verifies the build, extracts the 48 static tables, reads the delay presets, and harvests
+the reverb and chorus coefficients. It writes `presets.json`, which the build copies next to the
+assembly. The library also honours `TABULASONORA_PRESETS`, or a host can call
+`EffectPresets.Use(...)`. Without it the first effect render fails with a message saying how to fix it.
+
+### One platform caveat, stated plainly
+
+`prepare` needs **Windows x64** — but only for the reverb and chorus coefficients, and only once.
+
+Those coefficients are *computed by the engine at start-up* from the GS macro parameters; they are
+not stored in the DLL. Searching the file finds neither the tap positions nor the delay lengths they
+derive from. Short of re-deriving Roland's coefficient maths, the only way to obtain them is to let
+the engine compute them and read its state — which means executing `SCCore.dll`, a 64-bit Windows
+binary.
+
+This is the **only** place in the project that loads the DLL as code. The library never does, and
+rendering is fully managed and cross-platform.
+
+The output does not depend on the machine: a `presets.json` produced on any Windows host is valid
+everywhere. On macOS or Linux, run `prepare` once on Windows and copy that one 28 KB file across.
+Everything else `prepare` does works on any platform.
 
 ### Render options
 
@@ -77,26 +96,30 @@ clone with no DLL present. Pushing to `main` publishes the site via GitHub Actio
 | path | what |
 |---|---|
 | `src/TabulaSonora` | the library — `Rom`, `Patches`, `Dsp`, `Voices`, `Effects`, `Midi` |
-| `src/TabulaSonora.Tools` | CLI: `render`, `bake-presets`, `extract-tables`, `info` |
+| `src/TabulaSonora.Tools` | CLI: `prepare`, `render`, `extract-tables`, `info` |
 | `tests/TabulaSonora.Tests` | conformance and differential tests |
 | `docs/` | DocFX sources; `docs/_site` and `docs/api` are generated |
 | `tools/*.py` | fixture generators — see below |
 
-## On the Python
+## What this repository does *not* need
 
-The build and run path is pure C#. The only remaining Python is the differential fixture generators
-in `tools/`, and they stay Python on purpose: they sweep the spec repo's own reference implementation
-to produce the expected values the tests assert against. Porting them to C# would make them compare
-this engine against itself, which proves nothing.
+Building, preparing, rendering and the conformance tests need nothing but this repository, .NET, and
+your own `SCCore.dll`. There is no dependency on the spec repository and none on Python.
 
-They are needed only to regenerate fixtures, and they run through `uv`:
+Two things are optional, and both are for *re-deriving* test expectations rather than for using the
+engine. Tests that need them skip cleanly when they are absent:
 
-```
-uv run --with numpy python tools/gen_fixtures.py
-```
+- **The differential fixtures.** The generators in `tools/` are Python on purpose: they sweep the
+  [spec repository's](https://github.com/TabulaSonora/spec) reference implementation to produce the
+  values the tests assert against. Porting them to C# would make the engine compare against itself,
+  which proves nothing. Run through `uv`:
 
-Tests that need generated data skip cleanly when it is absent, so a fresh clone builds and runs the
-pure-logic tests without any of it.
+  ```
+  uv run --with numpy python tools/gen_fixtures.py
+  ```
+
+- **The golden engine traces** — controller sweeps and per-tick voice-state captures taken from the
+  real DLL with the spec repo's `scdec` harness. A handful of conformance tests use them.
 
 ## Verification
 

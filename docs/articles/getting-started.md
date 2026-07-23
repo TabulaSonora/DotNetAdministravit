@@ -11,23 +11,35 @@ build and refuses any other, because a different build moves every table offset:
 | SHA-256 | `117E6AA147A96FBDE5E10D2CAF16C89965ACC1E44235FD245992216CC620BDB1` |
 | PE timestamp | 2019-10-30 |
 
-## Build the effect coefficients
+## Prepare, once
 
-The reverb and chorus coefficients are read out of the running engine and are Roland's, so they are
-not shipped. Build them once from your own DLL:
+One command derives everything from the DLL. No other repository is involved.
 
 ```
 dotnet run -c Release --project src/TabulaSonora.Tools -- \
-    bake-presets "<path>/SCCore.dll" "<spec-repo>/tables" src/TabulaSonora/Effects/presets.json
+    prepare "<path>/SCCore.dll" --tables tables
 ```
 
-The `tables` directory holds the `scdec revdump` / `chodump` output from the
-[spec repository](https://github.com/TabulaSonora/spec). The generated file is copied next to the
-assembly at build time; the library also honours `TABULASONORA_PRESETS`, or a host can supply them
-directly with [`EffectPresets.Use`](xref:TabulaSonora.Effects.EffectPresets.Use*).
+It verifies the build, extracts the 48 static tables, reads the delay presets, and harvests the
+reverb and chorus coefficients, writing `presets.json`. The build copies that next to the assembly;
+the library also honours `TABULASONORA_PRESETS`, or a host can supply presets directly with
+[`EffectPresets.Use`](xref:TabulaSonora.Effects.EffectPresets.Use*).
 
-Without it, the first effect render fails with a message explaining how to build it — the build
-itself still succeeds.
+Without it the first effect render fails with a message explaining how to fix it — the build itself
+still succeeds.
+
+> [!IMPORTANT]
+> `prepare` needs **Windows x64**, for one step only.
+>
+> The reverb and chorus coefficients are computed by the engine at start-up from the GS macro
+> parameters rather than stored in the DLL — neither the tap positions nor the delay lengths behind
+> them appear anywhere in the file. Obtaining them means letting the engine compute them and reading
+> its state, which requires executing `SCCore.dll`.
+>
+> This is the only place in the project that loads the DLL as code; the library never does, and
+> rendering is fully managed and cross-platform. The result carries no machine state, so a
+> `presets.json` made on any Windows host works everywhere — run `prepare` once there and copy the
+> 28 KB file. Every other step works on any platform.
 
 ## Render a file
 
