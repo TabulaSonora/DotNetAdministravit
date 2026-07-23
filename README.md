@@ -79,10 +79,11 @@ Playback starts immediately: the song is synthesised through the block loop as i
 seventy times realtime on one core. `--prerender` renders it in full first instead, which makes
 seeking exact and lets the meters look ahead rather than behind.
 
-Audio goes out through [OwnAudioSharp](https://github.com/modernmube/ownaudiosharp). By default it
-opens **WASAPI at 32 kHz** — the engine's own rate, so nothing resamples on the way to the device.
-PortAudio's fallback host on Windows is MME, which is far too coarse for smooth playback, hence the
-explicit default; override with `--host`.
+Audio goes out through [OwnAudioSharp](https://github.com/modernmube/ownaudiosharp) at **32 kHz** —
+the engine's own rate, so nothing resamples on the way to the device. On macOS the host is always
+**CoreAudio**, the one host the platform has. On Windows it is **WASAPI**: PortAudio's fallback there
+is MME, which is far too coarse for smooth playback, hence the explicit default; override it with
+`--host`.
 
 If it stutters, raise `--latency` (default 150 ms). The send loop is paced from managed code against
 the device's own frame counter, and a `Thread.Sleep(1)` on Windows routinely lasts 15 ms, so the lead

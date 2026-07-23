@@ -35,8 +35,7 @@ var latencyMs = 150;
 var prerender = false;
 string? device = null;
 
-// MME is PortAudio's fallback host on Windows and is far too coarse for smooth playback.
-var host = OperatingSystem.IsWindows() ? EngineHostType.WASAPI : EngineHostType.None;
+var host = DefaultHost();
 
 try
 {
@@ -57,6 +56,14 @@ try
                 {
                     Console.Error.WriteLine(
                         $"error: unknown host '{args[i]}'. One of: {string.Join(", ", Enum.GetNames<EngineHostType>())}");
+                    return 1;
+                }
+
+                if (OperatingSystem.IsMacOS() && host != EngineHostType.COREAUDIO)
+                {
+                    Console.Error.WriteLine(
+                        "error: macOS has one audio host, CoreAudio, and the player always uses it. " +
+                        "Pick a device with --device instead.");
                     return 1;
                 }
 
@@ -106,8 +113,9 @@ static void Usage() => Console.WriteLine("""
     Options
       --map 1..4        SC-55, SC-88, SC-88Pro, SC-8820 (default 4)
       --device <name>   output device; substring match, or an index
-      --host <api>      WASAPI (default on Windows), WDMKS, ASIO, COREAUDIO, ALSA, ...
+      --host <api>      WASAPI (default on Windows), WDMKS, ASIO, ALSA, ...
                         MME is PortAudio's fallback and is too coarse for smooth playback
+                        macOS is always COREAUDIO; the option is refused there
       --rate <hz>       output rate (default 32000, the engine's own rate)
       --buffer <frames> device buffer (default 512)
       --latency <ms>    how far ahead to keep the device fed (default 150)
@@ -124,9 +132,22 @@ static void Usage() => Console.WriteLine("""
       q, esc  quit
     """);
 
+/// <summary>
+/// The host API the player opens when <c>--host</c> says nothing.
+/// </summary>
+/// <remarks>
+/// macOS has exactly one audio host, CoreAudio, so it is named outright rather than left to the
+/// backend's own choice. On Windows the fallback would be MME, which is far too coarse for smooth
+/// playback, hence WASAPI. Elsewhere the backend picks.
+/// </remarks>
+static EngineHostType DefaultHost() =>
+    OperatingSystem.IsMacOS() ? EngineHostType.COREAUDIO
+    : OperatingSystem.IsWindows() ? EngineHostType.WASAPI
+    : EngineHostType.None;
+
 static int ListDevices()
 {
-    OwnaudioNet.Initialize(Config(NoteRenderer.SampleRate, 512, EngineHostType.None), false, 8);
+    OwnaudioNet.Initialize(Config(NoteRenderer.SampleRate, 512, DefaultHost()), false, 8);
     try
     {
         var devices = OwnaudioNet.GetOutputDevices();
@@ -151,7 +172,11 @@ static AudioConfig Config(int sampleRate, int bufferFrames, EngineHostType host)
     BufferSize = bufferFrames,
     EnableOutput = true,
     EnableInput = false,
-    HostType = host,
+
+    // OwnAudio ships no PortAudio build for macOS, so it falls back to MiniAudio, which takes the
+    // platform's default host and warns about any HostType handed to it. That default is CoreAudio,
+    // which is the one host macOS has, so ask for nothing and let the warning go unearned.
+    HostType = OperatingSystem.IsMacOS() ? EngineHostType.None : host,
 };
 
 static ChannelMask Channels(ChannelMask? mask, string list, bool mute)

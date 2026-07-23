@@ -79,13 +79,14 @@ every render option above, plus:
 | `--prerender` | render the whole song before playing instead of streaming it |
 | `--list-devices` | enumerate outputs and exit |
 | `--device NAME\|N` | pick an output by name fragment or index |
-| `--host NAME` | PortAudio host API — `WASAPI` (default on Windows), `MME`, `DirectSound`, `WDMKS`, `ASIO`, `None` |
+| `--host NAME` | PortAudio host API — `WASAPI` (default on Windows), `MME`, `DirectSound`, `WDMKS`, `ASIO`, `None`. Refused on macOS, which is always CoreAudio |
 | `--latency MS` | how far ahead of the device to run; default 150 |
 | `--rate HZ`, `--buffer FRAMES` | device rate and block size; default 32000 and 512 |
 | `--gain G` | linear gain on the way out |
 
-The default host is WASAPI rather than PortAudio's own Windows fallback, MME, which is too coarse for
-smooth playback. The default rate is the engine's own 32 kHz, so nothing resamples on the way to the
+On Windows the default host is WASAPI rather than PortAudio's own fallback, MME, which is too coarse
+for smooth playback. On macOS it is always CoreAudio — the one host the platform has — so `--host` is
+refused there. The default rate is the engine's own 32 kHz, so nothing resamples on the way to the
 device.
 
 If it stutters, raise `--latency`. The send loop is paced from managed code against the device's own
