@@ -251,6 +251,11 @@ public sealed class ToneGenerator
             case 0x90 when data2 > 0:
                 // Re-striking a still-open note takes the old voice first.
                 StopNote(channel, data1);
+
+                // The new strike supersedes a note-off the pedal is still holding for this note.
+                // Without this the pedal's lift releases the note being struck here.
+                part.Sustained.RemoveAll(n => n == data1);
+
                 StartNote(channel, data1, data2);
                 break;
 

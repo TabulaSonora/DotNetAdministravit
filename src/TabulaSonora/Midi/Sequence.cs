@@ -277,6 +277,13 @@ public static class SequenceBuilder
                 case 0x90 when e.Data2 > 0:
                     // Re-striking a still-open note closes the old voice first.
                     CloseNote(channel, e.Data1, e.Position);
+
+                    // The new strike supersedes any note-off of this note that the pedal is still
+                    // holding. Leaving that parked entry in place makes the pedal's lift close the
+                    // note being struck here, which the player has not released -- 24 notes vanish
+                    // from onestop.mid's harpsichord passage, each 20-80 ms after being struck.
+                    sustained.RemoveAll(s => s.Channel == channel && s.Note == e.Data1);
+
                     open.Add((channel, e.Data1, e.Position, e.Data2));
                     break;
 

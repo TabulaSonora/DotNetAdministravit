@@ -66,6 +66,24 @@ public class MidiTests
         Assert.True(index > 5000, $"Only {index} events compared.");
     }
 
+    /// <summary>
+    /// Every note, matched to the reference by where it starts rather than by position in the list.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The reference releases a note at the sustain pedal's lift even when the note was struck
+    /// <em>after</em> its own note-off was parked there — a re-strike leaves the parked entry behind,
+    /// and the lift then closes the note the player is still holding. This port drops the parked entry
+    /// on the re-strike, so those notes ring on to their real note-off.
+    /// </para>
+    /// <para>
+    /// That changes the order notes close in, so an index-by-index comparison would report every note
+    /// after the first affected one as wrong. Matching on (channel, note, on) instead keeps the
+    /// comparison exact on all thirteen latched fields and isolates the difference to the one field it
+    /// can touch: a note may end <em>later</em> than the reference says, never earlier, and nothing
+    /// else may move. On canyon.mid that is 23 notes of 2,774.
+    /// </para>
+    /// </remarks>
     [SkippableFact]
     public void ExtractsEveryNoteWithTheSameLatchedParameters()
     {
@@ -75,32 +93,128 @@ public class MidiTests
 
         Assert.Equal(expected.GetArrayLength(), sequence.Notes.Count);
 
-        var index = 0;
+        // Several notes can share a start, so each key holds a list and matches are consumed.
+        var byStart = new Dictionary<(int Channel, int Note, int On), List<JsonElement>>();
         foreach (var row in expected.EnumerateArray())
         {
-            var n = sequence.Notes[index];
+            var key = (row[0].GetInt32(), row[1].GetInt32(), row[3].GetInt32());
+            if (!byStart.TryGetValue(key, out var list))
+            {
+                byStart[key] = list = [];
+            }
+
+            list.Add(row);
+        }
+
+        var names = new[]
+        {
+            "channel", "note", "velocity", "on", "off", "program", "bank",
+            "pan", "volume", "expression", "reverbSend", "chorusSend", "delaySend",
+        };
+
+        var compared = 0;
+        var heldLonger = 0;
+
+        foreach (var n in sequence.Notes)
+        {
+            var key = (n.Channel, n.Note, (int)n.On);
+            Assert.True(byStart.TryGetValue(key, out var candidates) && candidates.Count > 0,
+                $"note {compared}: channel {n.Channel} note {n.Note} at {n.On} is not in the reference.");
+
+            // Prefer the row that agrees on the end, so an unaffected note never consumes the slot
+            // belonging to one the pedal moved.
+            var slot = candidates!.FindIndex(r => r[4].GetInt32() == (int)n.Off);
+            var row = candidates[slot < 0 ? 0 : slot];
+            candidates.RemoveAt(slot < 0 ? 0 : slot);
+
             var fields = new[]
             {
                 n.Channel, n.Note, n.Velocity, (int)n.On, (int)n.Off, n.Program, n.Bank,
                 n.Pan, n.Volume, n.Expression, n.ReverbSend, n.ChorusSend, n.DelaySend,
             };
 
-            var names = new[]
-            {
-                "channel", "note", "velocity", "on", "off", "program", "bank",
-                "pan", "volume", "expression", "reverbSend", "chorusSend", "delaySend",
-            };
-
             for (var f = 0; f < fields.Length; f++)
             {
+                if (f == 4 && fields[f] != row[f].GetInt32())
+                {
+                    Assert.True(fields[f] > row[f].GetInt32(),
+                        $"note {compared} ends at {fields[f]}, before the reference's {row[f].GetInt32()}; " +
+                        "clearing a parked pedal entry can only let a note ring longer.");
+                    heldLonger++;
+                    continue;
+                }
+
                 Assert.True(row[f].GetInt32() == fields[f],
-                    $"note {index} {names[f]} = {fields[f]}, expected {row[f].GetInt32()}");
+                    $"note {compared} {names[f]} = {fields[f]}, expected {row[f].GetInt32()}");
             }
 
-            index++;
+            compared++;
         }
 
-        Assert.True(index > 2000, $"Only {index} notes compared.");
+        Assert.True(compared > 2000, $"Only {compared} notes compared.");
+
+        // A wholesale reordering would otherwise pass field-by-field; this bounds the divergence to
+        // the handful of notes the pedal case can reach.
+        Assert.True(heldLonger < compared / 20,
+            $"{heldLonger} of {compared} notes outlive the reference, which is more than the sustain " +
+            "pedal's re-strike case can explain.");
+    }
+
+    /// <summary>
+    /// A note struck while the pedal is down outlives the lift, because its own note-off has not come.
+    /// </summary>
+    /// <remarks>
+    /// The pedal parks a note-off rather than acting on it. Re-striking the same note must discard
+    /// that parked entry — otherwise the lift releases the strike the player is still holding, and the
+    /// note vanishes 20–80 ms after it sounds. onestop.mid's harpsichord passage rides the pedal every
+    /// half second over constantly re-struck notes and loses 24 notes to it, which is audible as
+    /// notes cutting off.
+    /// </remarks>
+    [Fact]
+    public void ARestrikeUnderThePedalSurvivesTheLift()
+    {
+        const int Damper = 64;
+        var grid = SmfReader.BlockGrid;
+
+        // strike, pedal down, release (parked), strike again, pedal up, then a real note-off
+        var sequence = SequenceBuilder.Build(
+        [
+            new MidiEvent { Position = 0 * grid, Status = 0x90, Data1 = 60, Data2 = 100 },
+            new MidiEvent { Position = 10 * grid, Status = 0xB0, Data1 = Damper, Data2 = 127 },
+            new MidiEvent { Position = 20 * grid, Status = 0x80, Data1 = 60, Data2 = 0 },
+            new MidiEvent { Position = 30 * grid, Status = 0x90, Data1 = 60, Data2 = 100 },
+            new MidiEvent { Position = 40 * grid, Status = 0xB0, Data1 = Damper, Data2 = 0 },
+            new MidiEvent { Position = 50 * grid, Status = 0x80, Data1 = 60, Data2 = 0 },
+        ]);
+
+        Assert.Equal(2, sequence.Notes.Count);
+
+        // The first strike ends where the second one takes its voice.
+        Assert.Equal(0 * grid, sequence.Notes[0].On);
+        Assert.Equal(30 * grid, sequence.Notes[0].Off);
+
+        // The second survives the lift at 40 and ends at its own note-off.
+        Assert.Equal(30 * grid, sequence.Notes[1].On);
+        Assert.Equal(50 * grid, sequence.Notes[1].Off);
+    }
+
+    /// <summary>A note-off parked by the pedal and never re-struck still releases at the lift.</summary>
+    [Fact]
+    public void APedalledNoteOffStillReleasesAtTheLift()
+    {
+        const int Damper = 64;
+        var grid = SmfReader.BlockGrid;
+
+        var sequence = SequenceBuilder.Build(
+        [
+            new MidiEvent { Position = 0 * grid, Status = 0x90, Data1 = 60, Data2 = 100 },
+            new MidiEvent { Position = 10 * grid, Status = 0xB0, Data1 = Damper, Data2 = 127 },
+            new MidiEvent { Position = 20 * grid, Status = 0x80, Data1 = 60, Data2 = 0 },
+            new MidiEvent { Position = 40 * grid, Status = 0xB0, Data1 = Damper, Data2 = 0 },
+        ]);
+
+        var note = Assert.Single(sequence.Notes);
+        Assert.Equal(40 * grid, note.Off);
     }
 
     [SkippableFact]
