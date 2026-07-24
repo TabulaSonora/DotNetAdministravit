@@ -635,13 +635,14 @@
       "symbol": "g_wavedesc_table",
       "subsystem": "DIR",
       "dtype": "bytes",
-      "shape": "stride",
-      "size": 90112,
+      "shape": "0x16 stride x4259",
+      "size": 93698,
       "file_offset": "0x1896b40",
       "va": null,
       "section_adjust": null,
       "match": "full",
-      "purpose": "wave descriptors: ROM coords, root key, loop"
+      "purpose": "wave descriptors: ROM coords, root key, loop",
+      "note": "was 0x16000 (4096 records), another round number and another 163 zones short. Multisamples a defined tone reaches name waves up to 4258, and 4259 records is exactly what fits before g_drum_kits at 0x18ad950 -- they end at 0x18ad942. The keys this silenced are the reverse and SFX drum kits, whose tones are themselves in the range the short tone slice used to hide. Note that g_wave_desc_table_b and _g_multisample_table_b are both aliased to the A tables at init (@180086d00), so the A/B selector in multisample_select_wave picks between two pointers to the same memory in this build -- these indices are not a second table."
     }
   ],
   "live_regions": [

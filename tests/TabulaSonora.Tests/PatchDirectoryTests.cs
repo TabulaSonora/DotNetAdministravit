@@ -22,8 +22,13 @@ public class PatchDirectoryTests
         // tone_lookup tests only tone# < 0x4000 and indexes -- so a power of two was a guess, and it
         // cut 315 records off the end. Drum kits reach tone 2353; see the note on the manifest entry.
         Assert.Equal(2363, directory.ToneCount);
+        // 2048 here is genuine and not the same guess: no partial of any tone reaches past
+        // multisample 1174, so this table really does have room to spare.
         Assert.Equal(2048, directory.MultisampleCount);
-        Assert.Equal(4096, directory.WaveCount);
+
+        // 4259, and 4096 was the same round-number mistake as the tone table. Multisamples a defined
+        // tone reaches name waves up to 4258, and 4259 records is exactly what fits below g_drum_kits.
+        Assert.Equal(4259, directory.WaveCount);
         Assert.Equal(50, directory.AlternateCount);
     }
 
@@ -153,10 +158,13 @@ public class PatchDirectoryTests
         }
 
         Assert.Equal(2022, forward);
-        Assert.Equal(2014, matched);
 
-        // The only forward waves without a descriptor are empty-loop one-shots (end == start),
-        // plausibly reached through the drum tone table, which is not reversed.
+        // Every one of them, with nothing left over to explain. This read 2014 while the descriptor
+        // table was sliced at a round 4096 records, and the eight it could not place were guessed to
+        // be one-shots reached through the drum tone table. They were not: they were waves 4096 and
+        // up, past the end of a short slice. The engine's own captured selections are the third
+        // oracle to say so, after the kit references and the layout bound.
+        Assert.Equal(2022, matched);
         Assert.Empty(unmatchedWithLoop);
     }
 
