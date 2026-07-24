@@ -6,6 +6,9 @@ in [TabulaSonora](https://github.com/TabulaSonora/spec). It reads the wave ROM a
 
 MIDI file in, audio out, at roughly 15× realtime on one core.
 
+**It runs in a browser: [tabula-sonora.kddlb.cl](https://tabula-sonora.kddlb.cl).** Bring your own
+`SCCore.dll` — there is no back end, and the file is read and cached in the tab rather than uploaded.
+
 ## What is and is not in this repository
 
 Everything here is original work: the C# is written from the reverse-engineering notes, not
@@ -109,8 +112,11 @@ has to cover the scheduler's worst nap rather than its average one.
 
 ### In the browser
 
-The same engine runs client-side, as a standalone Blazor WebAssembly application — file playback,
-WAV export, a 16-channel mixer, and live Web MIDI in.
+**Running at [tabula-sonora.kddlb.cl](https://tabula-sonora.kddlb.cl).** The same engine, client-side,
+as a standalone Blazor WebAssembly application — file playback, WAV export, a 16-channel mixer, and
+live Web MIDI in. Bring your own `SCCore.dll`; the page caches it in IndexedDB on the first visit.
+
+To build it yourself:
 
 ```
 dotnet workload install wasm-tools
