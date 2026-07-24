@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <PropertyGroup>
+    <RootNamespace>TabulaSonora.Web</RootNamespace>
+    <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
+    <!--
+      Nothing here is localised and no user-facing number is formatted through a culture, so the ICU
+      data is dead weight in a download that already asks the user for a 27 MB DLL.
+    -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!--
+      The DSP is scalar float in long loops, which is what AOT is for: interpreted, the block loop
+      runs at a small multiple of realtime and playback has no headroom left over for the UI. AOT
+      needs 'dotnet workload install wasm-tools'; without it the app still builds and runs, only
+      slower, so this is conditioned on Release rather than made a hard requirement of the clone.
+    -->
+    <RunAOTCompilation Condition="'$(Configuration)' == 'Release'">true</RunAOTCompilation>
+    <WasmEnableSIMD>true</WasmEnableSIMD>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.10" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.10" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The library only. Never TabulaSonora.Player: its audio host is a native PortAudio binding and
+      cannot load in WebAssembly. Output here goes through an AudioWorklet instead.
+    -->
+    <ProjectReference Include="..\TabulaSonora\TabulaSonora.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      A browser cannot harvest these coefficients for itself: the engine computes them at start-up and
+      only a Windows x64 host can run it. This is the one piece of Roland-derived data the repository
+      carries, and shipping it is what gives the browser build its effects. See NOTICE.md.
+
+      Embedded in THIS assembly rather than the library's. The library deliberately does not compile
+      them in, so that a host embedding TabulaSonora.dll does not acquire Roland's data by accident,
+      and embedding rather than copying to wwwroot keeps one copy of the file in the tree.
+    -->
+    <EmbeddedResource Include="..\TabulaSonora\Effects\presets.json"
+                      LogicalName="TabulaSonora.Web.presets.json" />
+  </ItemGroup>
+
+</Project>

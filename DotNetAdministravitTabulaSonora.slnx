@@ -3,6 +3,7 @@
     <Project Path="src/TabulaSonora.Player/TabulaSonora.Player.csproj" />
     <Project Path="src/TabulaSonora.Tools/TabulaSonora.Tools.csproj" />
     <Project Path="src/TabulaSonora/TabulaSonora.csproj" />
+    <Project Path="src/TabulaSonora.Web/TabulaSonora.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/TabulaSonora.Tests/TabulaSonora.Tests.csproj" />

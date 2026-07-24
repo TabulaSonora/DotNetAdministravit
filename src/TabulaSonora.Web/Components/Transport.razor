@@ -1,0 +1,125 @@
+@implements IDisposable
+@inject SynthSession Session
+@inject PlaybackPump Pump
+
+<section class="panel">
+    <h2>Song</h2>
+
+    <div class="row">
+        <InputFile OnChange="LoadAsync" accept=".mid,.midi" />
+        @if (Session.Song is { } loaded)
+        {
+            <span class="note">@loaded.Name &mdash; @Format(loaded.Duration)</span>
+        }
+    </div>
+
+    @if (Session.Song is not null)
+    {
+        <div class="row transport">
+            <button @onclick="PlayAsync" disabled="@(Pump.State == TransportState.Playing && Pump.Mode == PlaybackMode.Song)">Play</button>
+            <button @onclick="PauseAsync" disabled="@(Pump.State != TransportState.Playing)">Pause</button>
+            <button class="secondary" @onclick="() => SeekAsync(0)">Rewind</button>
+            <button class="secondary" @onclick="() => NudgeAsync(-10)">&minus;10s</button>
+            <button class="secondary" @onclick="() => NudgeAsync(10)">+10s</button>
+        </div>
+
+        <input type="range" class="scrub"
+               min="0" max="@Session.Song.LengthSamples" step="320"
+               value="@Pump.AudiblePosition"
+               @onchange="ScrubAsync" />
+
+        <div class="row readouts">
+            <span class="clock">@Format(Elapsed) / @Format(Session.Song.Duration)</span>
+            <span class="note">@Session.ActiveVoices of 64 voices</span>
+            <span class="note">@Session.NoteCount notes</span>
+            @if (Pump.Audio is { } audio)
+            {
+                <span class="note">@audio.SampleRate.ToString("N0") Hz@(audio.Resampling ? " (resampled)" : "")</span>
+                <span class="note @(audio.Queued < 4096 ? "warn" : "")">@((int)audio.Lead.TotalMilliseconds) ms ahead</span>
+                @if (Pump.RealtimeFactor > 0)
+                {
+                    <span class="note @(Pump.RealtimeFactor < 1.5 ? "warn" : "")">
+                        @Pump.RealtimeFactor.ToString("0.0")&times; realtime
+                    </span>
+                }
+                @if (audio.Starved > 0)
+                {
+                    <span class="warn">@audio.Starved starved frames</span>
+                }
+            }
+        </div>
+    }
+
+    @if (_error is not null)
+    {
+        <p class="error">@_error</p>
+    }
+</section>
+
+@code {
+    private string? _error;
+
+    private TimeSpan Elapsed =>
+        TimeSpan.FromSeconds(Pump.AudiblePosition / (double)ToneGenerator.SampleRate);
+
+    protected override void OnInitialized()
+    {
+        Pump.Tick += Redraw;
+        Session.Changed += Redraw;
+    }
+
+    private void Redraw() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadAsync(InputFileChangeEventArgs e)
+    {
+        _error = null;
+
+        try
+        {
+            // MIDI files are kilobytes, not megabytes: unlike the DLL, this one is small enough that
+            // Blazor's own file stream is the simplest thing that works.
+            using var buffer = new MemoryStream();
+            await using (var stream = e.File.OpenReadStream(maxAllowedSize: 16 * 1024 * 1024))
+            {
+                await stream.CopyToAsync(buffer);
+            }
+
+            await Pump.StopAsync();
+            Session.LoadSong(buffer.ToArray(), e.File.Name);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task PlayAsync()
+    {
+        try
+        {
+            await Pump.PlaySongAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private Task PauseAsync() => Pump.PauseAsync();
+
+    private Task SeekAsync(long sample) => Pump.SeekAsync(sample);
+
+    private Task NudgeAsync(double seconds) =>
+        Pump.SeekAsync(Pump.AudiblePosition + (long)(seconds * ToneGenerator.SampleRate));
+
+    private Task ScrubAsync(ChangeEventArgs e) =>
+        long.TryParse(e.Value?.ToString(), out var sample) ? Pump.SeekAsync(sample) : Task.CompletedTask;
+
+    private static string Format(TimeSpan time) => $"{(int)time.TotalMinutes}:{time.Seconds:00}";
+
+    public void Dispose()
+    {
+        Pump.Tick -= Redraw;
+        Session.Changed -= Redraw;
+    }
+}

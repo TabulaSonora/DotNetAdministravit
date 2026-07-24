@@ -2,5 +2,7 @@
   href: architecture.md
 - name: Getting started
   href: getting-started.md
+- name: In the browser
+  href: web.md
 - name: Verification
   href: verification.md

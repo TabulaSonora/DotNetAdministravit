@@ -1,0 +1,170 @@
+@implements IDisposable
+@inject AssetStore Store
+@inject SynthSession Session
+
+@*
+    The gate everything else is behind. The DLL is the user's own, it is read in the browser and
+    stored in the browser, and it is never sent anywhere -- worth saying on the page itself, because
+    "drop a 27 MB file here" is otherwise a reasonable thing to be suspicious of.
+*@
+
+<section class="panel">
+    <h2>Sound Canvas ROM</h2>
+
+    @if (Session.Rom is { } rom)
+    {
+        <dl class="identity">
+            <dt>file</dt>
+            <dd>@rom.Name</dd>
+            <dt>size</dt>
+            <dd>@rom.Size.ToString("N0") bytes</dd>
+            <dt>sha-256</dt>
+            <dd class="hash">@rom.Sha256</dd>
+            <dt>checked</dt>
+            <dd>@(rom.Verified ? "full hash, this session" : "size and PE timestamp; hash taken when stored")</dd>
+        </dl>
+
+        <p class="ok">Verified against the pinned build. Tables loaded.</p>
+
+        <div class="row">
+            <button class="secondary" @onclick="ForgetAsync" disabled="@_busy">Forget stored DLL</button>
+            @if (_persistent)
+            {
+                <span class="note">Storage is persistent.</span>
+            }
+            else
+            {
+                <span class="warn">Storage is best-effort; the browser may evict it.</span>
+            }
+        </div>
+    }
+    else
+    {
+        <p>
+            This needs <code>SCCore.dll</code> from your own Sound Canvas VA installation &mdash;
+            exactly 27,347,456 bytes. It is read and cached in this browser, on this machine, and is
+            never uploaded.
+        </p>
+
+        <div class="row">
+            <input type="file" accept=".dll" @ref="_input" @onchange="PickedAsync" disabled="@_busy" />
+            @if (_busy)
+            {
+                <span class="note">@_step</span>
+            }
+        </div>
+    }
+
+    @if (_error is not null)
+    {
+        <p class="error">@_error</p>
+    }
+</section>
+
+@code {
+    private ElementReference _input;
+    private bool _busy;
+    private bool _persistent;
+    private string? _error;
+    private string _step = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // A DLL stored on a previous visit is loaded without asking. Getting straight to the music is
+        // the entire point of caching it.
+        var stored = await Store.DescribeAsync(AssetStore.RomKey);
+        if (stored is not null)
+        {
+            await LoadAsync(stored);
+        }
+    }
+
+    private async Task PickedAsync()
+    {
+        _busy = true;
+        _error = null;
+        _step = "reading the file and computing its SHA-256 — 27 MB, a few seconds…";
+        StateHasChanged();
+
+        try
+        {
+            _persistent = await Store.RequestPersistenceAsync();
+
+            var stored = await Store.PutFromInputAsync(AssetStore.RomKey, _input);
+            if (stored is null)
+            {
+                return;
+            }
+
+            await LoadAsync(stored);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task LoadAsync(StoredAsset stored)
+    {
+        _busy = true;
+        _step = $"reading {stored.Size:N0} bytes out of browser storage…";
+        StateHasChanged();
+
+        try
+        {
+            var bytes = await Store.ReadAsync(stored.Key);
+            if (bytes is null)
+            {
+                _error = "The stored file could not be read back. Pick it again.";
+                return;
+            }
+
+            _step = $"verifying the build and slicing {TableManifest.Default.CachedTables.Count} tables…";
+            StateHasChanged();
+
+            // Let the browser paint the message before the engine takes the thread to load tables.
+            await Task.Yield();
+
+            Session.LoadRom(bytes, stored.Name, stored.Sha256);
+            _persistent = await Store.RequestPersistenceAsync();
+        }
+        catch (RomIdentityException ex)
+        {
+            // The identity gate is the whole reason this can be trusted; say what it found and drop
+            // the file rather than leaving a wrong one cached to fail again on the next visit.
+            _error = ex.Message;
+            await Store.RemoveAsync(stored.Key);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ForgetAsync()
+    {
+        _busy = true;
+        try
+        {
+            await Store.RemoveAsync(AssetStore.RomKey);
+            Session.Dispose();
+            _error = null;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    public void Dispose()
+    {
+    }
+}

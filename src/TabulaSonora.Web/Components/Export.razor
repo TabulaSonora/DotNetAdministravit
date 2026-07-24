@@ -1,0 +1,87 @@
+@implements IDisposable
+@inject SynthSession Session
+@inject AudioOutput Audio
+
+<section class="panel">
+    <h2>Export</h2>
+
+    <div class="row">
+        <button @onclick="RunAsync" disabled="@(_running || Session.Song is null)">
+            @(_running ? "Rendering…" : "Render to WAV")
+        </button>
+
+        @if (_running)
+        {
+            <button class="secondary" @onclick="() => _cancellation?.Cancel()">Cancel</button>
+            <progress max="1" value="@_progress"></progress>
+            <span class="note">@((int)(_progress * 100))%</span>
+        }
+    </div>
+
+    <p class="note">
+        16-bit stereo at the engine's own 32 kHz, at fixed full-scale gain with no normalisation, so
+        the level is comparable with any other render. This uses the real-time block loop &mdash; the
+        same path as <code>render --stream</code> on the command line, bounded to the hardware's 64
+        voices &mdash; so the file it produces is the one the command line produces.
+    </p>
+
+    @if (_error is not null)
+    {
+        <p class="error">@_error</p>
+    }
+</section>
+
+@code {
+    private bool _running;
+    private double _progress;
+    private string? _error;
+    private CancellationTokenSource? _cancellation;
+
+    // Whether this panel can do anything depends on state another panel owns, and a component only
+    // redraws for events it handled itself. Subscribing is what keeps the button honest -- without it
+    // the export sits disabled after a song is loaded, which is exactly what it did.
+    protected override void OnInitialized() => Session.Changed += Redraw;
+
+    private void Redraw() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Session.Changed -= Redraw;
+
+    private async Task RunAsync()
+    {
+        if (Session.Song is not { } song)
+        {
+            return;
+        }
+
+        _running = true;
+        _progress = 0;
+        _error = null;
+        _cancellation = new CancellationTokenSource();
+
+        try
+        {
+            var progress = new Progress<double>(value =>
+            {
+                _progress = value;
+                StateHasChanged();
+            });
+
+            var wav = await Session.ExportWavAsync(progress, _cancellation.Token);
+            await Audio.DownloadAsync(Path.ChangeExtension(song.Name, ".wav"), wav);
+        }
+        catch (OperationCanceledException)
+        {
+            // The user asked; nothing to report.
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _running = false;
+            _cancellation?.Dispose();
+            _cancellation = null;
+        }
+    }
+}

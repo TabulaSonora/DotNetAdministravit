@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tabula Sonora</title>
+    <base href="/" />
+    <link rel="preload" id="webassembly" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <script type="importmap"></script>
+</head>
+
+<body>
+    <div id="app">
+        <div class="booting">
+            <h1>Tabula Sonora</h1>
+            <p id="boot-step">Starting up…</p>
+            <div class="boot-bar"><div id="boot-fill"></div></div>
+            <p id="boot-detail" class="boot-detail"></p>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui">
+        An unhandled error has occurred.
+        <a href="." class="reload">Reload</a>
+        <span class="dismiss">🗙</span>
+    </div>
+
+    <script src="_framework/blazor.webassembly#[.{fingerprint}].js" autostart="false"></script>
+    <script>
+        // The runtime is several megabytes and, under AOT, several more. A bare "Loading" gives the
+        // user nothing to tell a slow connection from a hung page, so report what is actually
+        // happening: bytes as they arrive, then the handover to .NET.
+        (function () {
+            const step = document.getElementById('boot-step');
+            const detail = document.getElementById('boot-detail');
+            const fill = document.getElementById('boot-fill');
+            const bar = fill.parentElement;
+
+            const mb = bytes => (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+
+            let loaded = 0;
+            let expected = 0;
+            let files = 0;
+            let headed = 0;
+            let done = 0;
+            let shown = 0;
+
+            function render() {
+                detail.textContent = `${done}/${files} files · ${mb(loaded)}`;
+
+                // The denominator is only meaningful once every response's headers are in. Show a
+                // fraction before then and a small file finishing first reads as 100% while the
+                // 20 MB one has not been counted yet -- which is exactly what the first attempt at
+                // this did. Blazor asks for every resource in one synchronous pass, so 'files' is
+                // final by the time any header comes back a round trip later.
+                if (files === 0 || headed < files) {
+                    bar.classList.add('indeterminate');
+                    return;
+                }
+
+                bar.classList.remove('indeterminate');
+
+                // Content-Length is the compressed length where the server encodes, while the stream
+                // delivers decompressed bytes, so the denominator can still undercount. Clamp, and
+                // do not let the bar retreat: past this point it only ever grows.
+                if (expected > 0) {
+                    shown = Math.max(shown, Math.min(100, (loaded / expected) * 100));
+                    fill.style.width = shown + '%';
+                }
+            }
+
+            // The runtime's own script loaders will not accept a Response -- a 'dotnetjs' resource
+            // must be answered with a URI string or the platform refuses to start. Returning
+            // undefined for those leaves Blazor to fetch them its own way, which is all we want:
+            // the bytes worth reporting are the assemblies and the wasm, and under AOT the wasm is
+            // most of the download by itself.
+            const measurable = ['assembly', 'pdb', 'dotnetwasm'];
+
+            Blazor.start({
+                loadBootResource: function (type, name, url, integrity) {
+                    if (!measurable.includes(type)) {
+                        return undefined;
+                    }
+
+                    files++;
+                    step.textContent = 'Downloading the .NET runtime…';
+
+                    return fetch(url, { cache: 'default', integrity: integrity })
+                        .then(async response => {
+                            // Take the size from the headers BEFORE reading the body. Counting it as
+                            // the body arrives would grow the denominator in step with the numerator
+                            // and pin the bar at full from the first file on.
+                            expected += Number(response.headers.get('content-length') || 0);
+                            headed++;
+                            render();
+
+                            if (!response.body) {
+                                const buffer = await response.arrayBuffer();
+                                loaded += buffer.byteLength;
+                                done++;
+                                render();
+                                return new Response(buffer, response);
+                            }
+
+                            const reader = response.body.getReader();
+                            const chunks = [];
+
+                            for (;;) {
+                                const { value, done: finished } = await reader.read();
+                                if (finished) {
+                                    break;
+                                }
+
+                                chunks.push(value);
+                                loaded += value.byteLength;
+                                render();
+                            }
+
+                            done++;
+                            render();
+                            return new Response(new Blob(chunks), response);
+                        })
+                        .catch(error => {
+                            step.textContent = 'Could not load the runtime.';
+                            detail.textContent = `${name}: ${error.message}`;
+                            throw error;
+                        });
+                },
+            }).then(() => {
+                step.textContent = 'Starting the engine…';
+                detail.textContent = `${files} files · ${mb(loaded)} downloaded`;
+                bar.classList.remove('indeterminate');
+                fill.style.width = '100%';
+            });
+        })();
+    </script>
+</body>
+
+</html>

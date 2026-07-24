@@ -1,0 +1,175 @@
+@implements IDisposable
+@inject SynthSession Session
+@inject MidiInput Midi
+@inject PlaybackPump Pump
+
+@*
+    Live playing needs the pump running even with no song loaded: with no sequence to drive, the
+    session renders straight from the generator, which is what these notes sound into.
+*@
+
+<section class="panel">
+    <h2>Play it</h2>
+
+    <div class="row">
+        @if (!Midi.IsSupported)
+        {
+            <span class="warn">This browser has no Web MIDI. The on-screen keyboard still works.</span>
+        }
+        else if (!Midi.IsOpen)
+        {
+            <button class="secondary" @onclick="ConnectAsync">Connect MIDI input</button>
+        }
+        else
+        {
+            <label>
+                Input
+                <select @onchange="ListenAsync">
+                    <option value="">— none —</option>
+                    @foreach (var device in Midi.Devices)
+                    {
+                        <option value="@device.Id" selected="@device.Connected">@device.Name</option>
+                    }
+                </select>
+            </label>
+            <span class="note">@Midi.Devices.Count device(s)</span>
+        }
+
+        <button class="secondary" @onclick="ArmAsync"
+                disabled="@(Pump.State == TransportState.Playing && Pump.Mode == PlaybackMode.Live)">
+            Start audio
+        </button>
+
+        @if (Pump.Mode == PlaybackMode.Song && Pump.State == TransportState.Playing)
+        {
+            <span class="note">
+                Playing a song, so keys come through the song's own buffer and arrive late. Pause it,
+                or press Start audio, to play at low latency.
+            </span>
+        }
+    </div>
+
+    <div class="row">
+        <label>
+            Channel
+            <select value="@_channel" @onchange="ChannelChanged">
+                @for (var c = 0; c < 16; c++)
+                {
+                    var index = c;
+                    <option value="@index">@(index + 1)@(index == 9 ? " (drums)" : "")</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            Program
+            <select value="@_program" @onchange="ProgramChanged">
+                @foreach (var entry in Programs())
+                {
+                    <option value="@entry.Program">@(entry.Program + 1). @entry.Name</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            Velocity
+            <input type="range" min="1" max="127" value="@_velocity"
+                   @onchange="e => _velocity = int.TryParse(e.Value?.ToString(), out var v) ? v : _velocity" />
+            <span class="note">@_velocity</span>
+        </label>
+    </div>
+
+    <Keyboard Velocity="_velocity" NoteOn="NoteOn" NoteOff="NoteOff" />
+</section>
+
+@code {
+    private int _channel;
+    private int _program;
+    private int _velocity = 100;
+
+    protected override void OnInitialized()
+    {
+        Midi.Changed += Redraw;
+
+        // The program list is named from the patch directory for the selected vintage, so it has to
+        // be rebuilt when the engine is.
+        Session.Changed += Redraw;
+    }
+
+    private void Redraw() => InvokeAsync(StateHasChanged);
+
+    // Names come out of the patch directory for the vintage currently selected, so switching from
+    // SC-55 to SC-8820 relabels the list the way the module would.
+    private IEnumerable<(int Program, string Name)> Programs()
+    {
+        var directory = Session.Directory;
+        for (var program = 0; program < 128; program++)
+        {
+            if (directory is null)
+            {
+                yield return (program, $"program {program + 1}");
+                continue;
+            }
+
+            var tone = directory.GetTone(directory.ProgramToTone(program, Session.Map, bank: 0));
+            yield return (program, tone is { IsDefined: true } ? tone.Name.Trim() : "—");
+        }
+    }
+
+    private async Task ConnectAsync()
+    {
+        await Midi.OpenAsync();
+        StateHasChanged();
+    }
+
+    private async Task ListenAsync(ChangeEventArgs e)
+    {
+        var id = e.Value?.ToString();
+        await Midi.ListenAsync(string.IsNullOrEmpty(id) ? null : id);
+        await ArmAsync();
+    }
+
+    // Nothing can be heard until a context exists and is running, and a browser will only start one
+    // inside a gesture -- so connecting an input or touching a key has to be what starts it.
+    //
+    // Arming live rather than playing: with a song loaded but stopped, this must not start the song,
+    // and it must buffer for latency rather than for safety.
+    private Task ArmAsync() =>
+        Pump.Mode == PlaybackMode.Song && Pump.State == TransportState.Playing
+            ? Task.CompletedTask
+            : Pump.ArmLiveAsync();
+
+    private void ChannelChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var channel))
+        {
+            _channel = channel;
+            SendProgram();
+        }
+    }
+
+    private void ProgramChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var program))
+        {
+            _program = program;
+            SendProgram();
+        }
+    }
+
+    private void SendProgram() => Session.SendChannel(0xC0 | _channel, _program, 0);
+
+    private async Task NoteOn(int note)
+    {
+        await ArmAsync();
+        Session.SendChannel(0x90 | _channel, note, _velocity);
+    }
+
+    private void NoteOff(int note) => Session.SendChannel(0x80 | _channel, note, 0);
+
+    public void Dispose()
+    {
+        Midi.Changed -= Redraw;
+        Session.Changed -= Redraw;
+    }
+}

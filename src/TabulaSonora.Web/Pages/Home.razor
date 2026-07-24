@@ -1,0 +1,51 @@
+@inject SynthSession Session
+@inject PlaybackPump Pump
+@implements IAsyncDisposable
+
+<PageTitle>Tabula Sonora</PageTitle>
+
+<header>
+    <h1>Tabula Sonora</h1>
+    <p class="subtitle">
+        A managed reimplementation of the Roland Sound Canvas VA synth voice, running entirely in this
+        tab. Your <code>SCCore.dll</code> is read here, cached here, and never leaves the machine.
+    </p>
+</header>
+
+<main>
+    <RomLoader />
+
+    @if (Session.IsReady)
+    {
+        <Transport />
+        <EngineControls />
+        <Mixer />
+        <Export />
+        <LivePlay />
+    }
+</main>
+
+<footer>
+    <p>
+        32 kHz internally, as the hardware is. Effects run from coefficients harvested out of the real
+        engine, which a browser cannot do for itself &mdash; they are the one piece of Roland-derived
+        data this page carries, and everything else comes from the DLL you supplied.
+    </p>
+</footer>
+
+@code {
+    // Loading a song enables the export; loading a ROM brings up everything below the loader. Blazor
+    // re-renders only the component that handled the event, so the page redraws from the session
+    // instead, which cascades to every panel.
+    protected override void OnInitialized() => Session.Changed += Redraw;
+
+    private void Redraw() => InvokeAsync(StateHasChanged);
+
+    public ValueTask DisposeAsync()
+    {
+        Session.Changed -= Redraw;
+        Pump.Dispose();
+        Session.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

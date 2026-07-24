@@ -32,18 +32,25 @@ var result = renderer.RenderFile("song.mid", new RenderOptions
 
 ## You must supply the DLL
 
-This engine is inert on its own. Roland's wave ROM, tables and effect coefficients are not
-redistributed here, and cannot be — see the repository's `NOTICE.md`. You need a legally obtained
-`SCCore.dll` from a Sound Canvas VA installation, pinned to one exact build:
+This engine is inert on its own. Roland's wave ROM and tables are not redistributed here — see the
+repository's `NOTICE.md`, which also covers the one file that is. You need a legally obtained
+`SCCore.dll` from a Sound Canvas VA installation, pinned to one exact build: the one shipped in
+**SOUND Canvas VA 1.1.6**.
 
 | field | value |
 |---|---|
+| SCVA release | 1.1.6 |
 | size | 27,347,456 bytes |
 | SHA-256 | `117E6AA1…C620BDB1` |
 | PE timestamp | 2019-10-30 |
 
 A different build moves every table offset, so [`RomImage`](xref:TabulaSonora.Rom.RomImage)
 refuses to open one.
+
+The release number tells you which installer to look in and nothing more. The DLL has no version
+resource, so 1.1.6 cannot be read from the file and is not verified;
+[`DllIdentity.Version`](xref:TabulaSonora.Rom.DllIdentity.Version) records it as provenance while the
+hash does the identifying.
 
 ## Why it exists
 

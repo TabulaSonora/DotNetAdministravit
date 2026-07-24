@@ -1,0 +1,65 @@
+@inject SynthSession Session
+
+@*
+    Changing any of these rebuilds the generator, which is why the note about voices stopping is on
+    the panel rather than hidden in a tooltip: a vintage swap mid-song resumes at the same place, but
+    whatever was ringing does not survive it.
+*@
+
+<section class="panel">
+    <h2>Engine</h2>
+
+    <div class="row">
+        <label>
+            Vintage
+            <select value="@((int)Session.Map)" @onchange="MapChanged">
+                <option value="1">SC-55</option>
+                <option value="2">SC-88</option>
+                <option value="3">SC-88Pro</option>
+                <option value="4">SC-8820</option>
+            </select>
+        </label>
+
+        <span class="note">
+            The same program resolves to different tones and pulls samples from different parts of
+            the ROM.
+        </span>
+    </div>
+
+    <div class="row toggles">
+        <label>
+            <input type="checkbox" checked="@Session.Reverb" @onchange="e => Session.Reverb = Truth(e)" />
+            Reverb
+        </label>
+        <label>
+            <input type="checkbox" checked="@Session.Chorus" @onchange="e => Session.Chorus = Truth(e)" />
+            Chorus
+        </label>
+        <label>
+            <input type="checkbox" checked="@Session.Delay" @onchange="e => Session.Delay = Truth(e)" />
+            Delay
+        </label>
+
+        <span class="note">
+            On by default, as on the module: a GM reset leaves every part's reverb send at 40, so a
+            dry render does not sound like the real thing.
+        </span>
+    </div>
+
+    <div class="row">
+        <button class="secondary" @onclick="() => Session.Panic()">Panic</button>
+        <span class="note">Silences everything and returns every part to its power-on state.</span>
+    </div>
+</section>
+
+@code {
+    private void MapChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var map))
+        {
+            Session.Map = (ToneMap)map;
+        }
+    }
+
+    private static bool Truth(ChangeEventArgs e) => e.Value is bool value && value;
+}

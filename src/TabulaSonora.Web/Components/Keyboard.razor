@@ -1,0 +1,102 @@
+@*
+    An on-screen keyboard for playing without hardware. Pointer events rather than mouse events, so
+    it works under a finger as well as a cursor, and pointer capture is released on down so that
+    dragging across the keys glissandos instead of holding the first one.
+*@
+
+<div class="keyboard" @onpointerleave="ReleaseAll">
+    @for (var offset = 0; offset < Keys; offset++)
+    {
+        var note = FirstNote + offset;
+        var black = IsBlack(note);
+
+        <button class="key @(black ? "black" : "white") @(_held.Contains(note) ? "down" : "")"
+                style="@Position(note)"
+                @onpointerdown="e => DownAsync(note, e)"
+                @onpointerup="() => UpAsync(note)"
+                @onpointerenter="e => EnterAsync(note, e)"
+                @onpointerleave="() => UpAsync(note)">
+            @(note == 60 ? "C4" : "")
+        </button>
+    }
+</div>
+
+@code {
+    /// <summary>Lowest note shown.</summary>
+    [Parameter]
+    public int FirstNote { get; set; } = 48;
+
+    /// <summary>How many semitones are shown.</summary>
+    [Parameter]
+    public int Keys { get; set; } = 25;
+
+    /// <summary>Velocity every key sends.</summary>
+    [Parameter]
+    public int Velocity { get; set; } = 100;
+
+    /// <summary>Raised on key down, with the MIDI note.</summary>
+    [Parameter]
+    public EventCallback<int> NoteOn { get; set; }
+
+    /// <summary>Raised on key up, with the MIDI note.</summary>
+    [Parameter]
+    public EventCallback<int> NoteOff { get; set; }
+
+    private readonly HashSet<int> _held = [];
+
+    private async Task DownAsync(int note, PointerEventArgs e)
+    {
+        if (!_held.Add(note))
+        {
+            return;
+        }
+
+        await NoteOn.InvokeAsync(note);
+    }
+
+    private async Task EnterAsync(int note, PointerEventArgs e)
+    {
+        // Buttons is a bitmask of what is currently pressed; zero means the pointer is only passing
+        // over, which must not sound a note.
+        if (e.Buttons != 0)
+        {
+            await DownAsync(note, e);
+        }
+    }
+
+    private async Task UpAsync(int note)
+    {
+        if (_held.Remove(note))
+        {
+            await NoteOff.InvokeAsync(note);
+        }
+    }
+
+    private async Task ReleaseAll()
+    {
+        foreach (var note in _held.ToArray())
+        {
+            await UpAsync(note);
+        }
+    }
+
+    private static bool IsBlack(int note) => (note % 12) is 1 or 3 or 6 or 8 or 10;
+
+    // White keys are laid out in sequence and black keys float between them, so a black key's
+    // position is the count of white keys below it rather than its semitone index.
+    private string Position(int note)
+    {
+        var whites = 0;
+        for (var n = FirstNote; n < note; n++)
+        {
+            if (!IsBlack(n))
+            {
+                whites++;
+            }
+        }
+
+        return IsBlack(note)
+            ? $"left: calc({whites} * var(--key-width) - var(--key-width) * 0.3);"
+            : $"left: calc({whites} * var(--key-width));";
+    }
+}

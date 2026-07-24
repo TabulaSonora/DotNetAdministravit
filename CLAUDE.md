@@ -8,6 +8,10 @@ A managed C# reimplementation of the Roland Sound Canvas VA synth voice. It read
 synth tables out of `SCCore.dll` **as a data file** — the library never loads it as code. MIDI in,
 audio out, fully cross-platform.
 
+Every offset is pinned to one build: the `SCCore.dll` shipped in **SOUND Canvas VA 1.1.6**. That file
+carries no version resource, so 1.1.6 is provenance recorded in `Rom/manifest.json` and nothing
+verifies it — identity is the SHA-256, the PE timestamp and the size.
+
 The goal is fidelity to the hardware, not merely plausible synthesis. Almost every constant here was
 recovered by measurement, and changing one on aesthetic grounds is a regression even when it sounds
 nicer.
@@ -44,6 +48,20 @@ dotnet run -c Release --project src/TabulaSonora.Player -- "<path>/SCCore.dll" s
 `--stream` renders through the real-time block loop instead of note-by-note. `render-note` is the
 fastest way to A/B a single patch against the DLL.
 
+The browser build. **Publish, do not `dotnet run`** — AOT happens at publish, and without it the
+engine runs at about 1× realtime and the audio starves; with it, 10.9×. The transport shows the
+measured figure, so check that before theorising about dropouts.
+
+```bash
+dotnet workload install wasm-tools      # once; AOT needs it
+dotnet publish -c Release src/TabulaSonora.Web
+# then serve bin/Release/net10.0/publish/wwwroot as static files
+```
+
+Fully client-side: no back end, no `HttpClient` registered, and the user's DLL is cached in IndexedDB
+and never leaves the machine. `docs/articles/web.md` covers the audio path and why blocks cross to
+JavaScript as `byte[]` rather than `float[]`.
+
 Docs (DocFX is pinned as a local tool; never runs the engine, so it works on a clean clone):
 
 ```bash
@@ -64,7 +82,7 @@ clone with no DLL still builds and runs the pure-logic tests.
 
 | variable | what |
 |---|---|
-| `TABULASONORA_SCCORE` | the pinned `SCCore.dll` (exactly 27,347,456 bytes; `RomImage` refuses others) |
+| `TABULASONORA_SCCORE` | the pinned `SCCore.dll` — the SOUND Canvas VA **1.1.6** build, exactly 27,347,456 bytes; `RomImage` refuses others |
 | `TABULASONORA_TABLES` | extracted `tables/*.bin` |
 | `TABULASONORA_TRACES` | golden per-tick captures from the real DLL |
 
