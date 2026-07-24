@@ -66,6 +66,8 @@ public sealed class Reverb : IEffect
     private const int InputTap = 0x1000;
 
     private readonly ReverbPreset _preset;
+    private readonly TankTaps _tapsA;
+    private readonly TankTaps _tapsB;
     private readonly double[] _ring = new double[RingSize];
 
     private double _dcState;
@@ -76,10 +78,33 @@ public sealed class Reverb : IEffect
 
     /// <summary>Creates a reverb.</summary>
     /// <param name="preset">Coefficients for the GS type.</param>
+    /// <exception cref="KeyNotFoundException">A tank is missing one of the eight named taps.</exception>
     public Reverb(ReverbPreset preset)
     {
         ArgumentNullException.ThrowIfNull(preset);
         _preset = preset;
+
+        // Resolved here rather than per sample. See TankTaps.
+        _tapsA = TankTaps.From(preset.TankA);
+        _tapsB = TankTaps.From(preset.TankB);
+    }
+
+    /// <summary>
+    /// One tank's eight ring offsets, resolved from their names once.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ReverbTank.Taps"/> is a <see cref="Dictionary{TKey,TValue}"/> because that is the
+    /// shape the harvester dumps and <c>presets.json</c> carries. Reading it is not: indexing it by
+    /// name inside the sample loop cost sixteen string hashes per sample — four per tank in
+    /// <see cref="RunTank"/> and eight more in the output taps — which measured 44.8 ms per ten
+    /// seconds of audio against the chorus's 1.1 ms for a comparable amount of arithmetic.
+    /// </remarks>
+    private readonly record struct TankTaps(
+        int Tap10, int Tap14, int Tap18, int Tap1C, int Tap20, int Tap24, int Tap28, int Tap2C)
+    {
+        public static TankTaps From(ReverbTank tank) => new(
+            tank.Taps["tap10"], tank.Taps["tap14"], tank.Taps["tap18"], tank.Taps["tap1C"],
+            tank.Taps["tap20"], tank.Taps["tap24"], tank.Taps["tap28"], tank.Taps["tap2C"]);
     }
 
     /// <summary>Creates a reverb for a GS type.</summary>
@@ -125,8 +150,8 @@ public sealed class Reverb : IEffect
     {
         var p = _preset;
         var diffusers = p.Diffusers;
-        var tankA = p.TankA.Taps;
-        var tankB = p.TankB.Taps;
+        var tankA = _tapsA;
+        var tankB = _tapsB;
         var nested = p.TankAllpasses;
 
         for (var i = 0; i < input.Length; i++)
@@ -164,22 +189,22 @@ public sealed class Reverb : IEffect
             RunTank(tankB, p.TankB, nested.B0, nested.B1, carry, p.GainFeedback, ref _tankStateB);
 
             // Output taps are latched before the cursor moves.
-            left[i] = (float)((_ring[(tankA["tap28"] + _writeCursor) & RingMask]
-                             + _ring[(tankA["tap20"] + _writeCursor) & RingMask]
-                             + _ring[(tankB["tap28"] + _writeCursor) & RingMask]
-                             + _ring[(tankB["tap20"] + _writeCursor) & RingMask]) * p.GainOutput);
+            left[i] = (float)((_ring[(tankA.Tap28 + _writeCursor) & RingMask]
+                             + _ring[(tankA.Tap20 + _writeCursor) & RingMask]
+                             + _ring[(tankB.Tap28 + _writeCursor) & RingMask]
+                             + _ring[(tankB.Tap20 + _writeCursor) & RingMask]) * p.GainOutput);
 
-            right[i] = (float)((_ring[(tankA["tap2C"] + _writeCursor) & RingMask]
-                              + _ring[(tankA["tap24"] + _writeCursor) & RingMask]
-                              + _ring[(tankB["tap2C"] + _writeCursor) & RingMask]
-                              + _ring[(tankB["tap24"] + _writeCursor) & RingMask]) * p.GainOutput);
+            right[i] = (float)((_ring[(tankA.Tap2C + _writeCursor) & RingMask]
+                              + _ring[(tankA.Tap24 + _writeCursor) & RingMask]
+                              + _ring[(tankB.Tap2C + _writeCursor) & RingMask]
+                              + _ring[(tankB.Tap24 + _writeCursor) & RingMask]) * p.GainOutput);
 
             _writeCursor = (_writeCursor - 1) & RingMask;
         }
     }
 
     private void RunTank(
-        Dictionary<string, int> taps,
+        in TankTaps taps,
         ReverbTank tank,
         AllpassStage first,
         AllpassStage second,
@@ -187,18 +212,18 @@ public sealed class Reverb : IEffect
         double feedback,
         ref double state)
     {
-        var lowpass = (_ring[(taps["tap1C"] + _writeCursor) & RingMask] * tank.CoefB) + (tank.CoefA * state);
+        var lowpass = (_ring[(taps.Tap1C + _writeCursor) & RingMask] * tank.CoefB) + (tank.CoefA * state);
         state = lowpass;
 
         var a = _ring[(first.ReadTap + _writeCursor) & RingMask];
         var p = (lowpass * feedback) + carry + (a * first.CoefA);
         _ring[(first.WriteTap + _writeCursor) & RingMask] = p;
-        _ring[(taps["tap10"] + _writeCursor) & RingMask] = (p * first.CoefB) + a;
+        _ring[(taps.Tap10 + _writeCursor) & RingMask] = (p * first.CoefB) + a;
 
         var b = _ring[(second.ReadTap + _writeCursor) & RingMask];
-        var q = (b * second.CoefA) + _ring[(taps["tap14"] + _writeCursor) & RingMask];
+        var q = (b * second.CoefA) + _ring[(taps.Tap14 + _writeCursor) & RingMask];
         _ring[(second.WriteTap + _writeCursor) & RingMask] = q;
-        _ring[(taps["tap18"] + _writeCursor) & RingMask] = (q * second.CoefB) + b;
+        _ring[(taps.Tap18 + _writeCursor) & RingMask] = (q * second.CoefB) + b;
     }
 }
 
