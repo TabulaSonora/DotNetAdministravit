@@ -16,6 +16,7 @@ builder.RootComponents.Add<HeadOutlet>("head::after");
 
 // One engine, one device, one pump, for the lifetime of the page.
 builder.Services.AddSingleton<AssetStore>();
+builder.Services.AddSingleton<EnginePreferences>();
 builder.Services.AddSingleton<AudioOutput>();
 builder.Services.AddSingleton<SynthSession>();
 builder.Services.AddSingleton<MidiInput>();
@@ -28,7 +29,24 @@ var host = builder.Build();
 // harvested themselves takes precedence over the one this application ships.
 await LoadPresetsAsync(host.Services);
 
+// The vintage the user last chose has to be in place before the first render, for a related reason:
+// the DLL cached from a previous visit is loaded without asking, so an engine built at the default
+// and reconfigured a frame later would be a second generator and a page that visibly settles into
+// the right vintage instead of opening in it.
+RestoreEngineSettings(host.Services);
+
 await host.RunAsync();
+
+static void RestoreEngineSettings(IServiceProvider services)
+{
+    var preferences = services.GetRequiredService<EnginePreferences>();
+    var session = services.GetRequiredService<SynthSession>();
+
+    session.Settings = preferences.Read();
+
+    // Subscribed after the restore rather than before it, so hydrating does not write itself back.
+    session.SettingsChanged += () => preferences.Write(session.Settings);
+}
 
 static async Task LoadPresetsAsync(IServiceProvider services)
 {

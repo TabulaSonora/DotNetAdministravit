@@ -12,6 +12,21 @@ namespace TabulaSonora.Web.Services;
 /// <param name="Verified">Whether the full hash was checked this session rather than trusted from storage.</param>
 public sealed record RomIdentity(string Name, long Size, string Sha256, bool Verified);
 
+/// <summary>The engine settings the page remembers between visits.</summary>
+/// <param name="Map">Which vintage's tone map program changes resolve against.</param>
+/// <param name="Reverb">Whether the reverb runs on its send bus.</param>
+/// <param name="Chorus">Whether the chorus runs on its send bus.</param>
+/// <param name="Delay">Whether the system delay runs on its send bus.</param>
+/// <remarks>
+/// Exactly the four values <see cref="ToneGeneratorOptions"/> is built from that the page can change,
+/// held as one unit so they are restored in a single rebuild rather than four.
+/// </remarks>
+public sealed record EngineSettings(ToneMap Map, bool Reverb, bool Chorus, bool Delay)
+{
+    /// <summary>Power-on state: SC-8820, with all three effects running as the module has them.</summary>
+    public static EngineSettings Default { get; } = new(ToneMap.Sc8820, Reverb: true, Chorus: true, Delay: true);
+}
+
 /// <summary>The loaded song.</summary>
 /// <param name="Name">File name as the user picked it.</param>
 /// <param name="Events">Parsed events, ordered by position.</param>
@@ -48,10 +63,7 @@ public sealed class SynthSession : IDisposable
     private ToneGenerator? _engine;
     private SequencePlayer? _player;
 
-    private ToneMap _map = ToneMap.Sc8820;
-    private bool _reverb = true;
-    private bool _chorus = true;
-    private bool _delay = true;
+    private EngineSettings _settings = EngineSettings.Default;
 
     /// <summary>Per-channel mute and solo, shared with every generator this session builds.</summary>
     public ChannelMask Channels { get; } = new();
@@ -66,6 +78,15 @@ public sealed class SynthSession : IDisposable
     /// </remarks>
     public event Action? Changed;
 
+    /// <summary>
+    /// Raised when one of the four settings in <see cref="EngineSettings"/> changes.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="Changed"/> because that also fires on a ROM or song load, and whoever
+    /// remembers these values between visits has no business writing storage on those.
+    /// </remarks>
+    public event Action? SettingsChanged;
+
     /// <summary>The DLL in use, or <see langword="null"/> before one is loaded.</summary>
     public RomIdentity? Rom { get; private set; }
 
@@ -78,33 +99,44 @@ public sealed class SynthSession : IDisposable
     /// <summary>The patch directory, for browsing programs by name.</summary>
     public PatchDirectory? Directory => _notes?.Directory;
 
+    /// <summary>All four engine settings at once.</summary>
+    /// <remarks>
+    /// Setting this rebuilds once rather than four times, which is what restoring a remembered set on
+    /// start-up and putting them all back to <see cref="EngineSettings.Default"/> both want.
+    /// </remarks>
+    public EngineSettings Settings
+    {
+        get => _settings;
+        set => Reconfigure(() => _settings = value);
+    }
+
     /// <summary>Which vintage's tone map program changes resolve against.</summary>
     /// <remarks>Setting this rebuilds the generator; sounding voices stop.</remarks>
     public ToneMap Map
     {
-        get => _map;
-        set => Reconfigure(() => _map = value);
+        get => _settings.Map;
+        set => Reconfigure(() => _settings = _settings with { Map = value });
     }
 
     /// <summary>Whether the reverb runs on its send bus.</summary>
     public bool Reverb
     {
-        get => _reverb;
-        set => Reconfigure(() => _reverb = value);
+        get => _settings.Reverb;
+        set => Reconfigure(() => _settings = _settings with { Reverb = value });
     }
 
     /// <summary>Whether the chorus runs on its send bus.</summary>
     public bool Chorus
     {
-        get => _chorus;
-        set => Reconfigure(() => _chorus = value);
+        get => _settings.Chorus;
+        set => Reconfigure(() => _settings = _settings with { Chorus = value });
     }
 
     /// <summary>Whether the system delay runs on its send bus.</summary>
     public bool Delay
     {
-        get => _delay;
-        set => Reconfigure(() => _delay = value);
+        get => _settings.Delay;
+        set => Reconfigure(() => _settings = _settings with { Delay = value });
     }
 
     /// <summary>How many voices are sounding right now.</summary>
@@ -284,10 +316,10 @@ public sealed class SynthSession : IDisposable
 
     private ToneGeneratorOptions Options() => new()
     {
-        Map = _map,
-        Reverb = _reverb,
-        Chorus = _chorus,
-        Delay = _delay,
+        Map = _settings.Map,
+        Reverb = _settings.Reverb,
+        Chorus = _settings.Chorus,
+        Delay = _settings.Delay,
         Channels = Channels,
     };
 
@@ -295,6 +327,8 @@ public sealed class SynthSession : IDisposable
     {
         change();
         Rebuild();
+
+        SettingsChanged?.Invoke();
 
         // Changing vintage renames the whole program list, so this is not only the engine's business.
         Changed?.Invoke();

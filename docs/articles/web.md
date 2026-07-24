@@ -76,6 +76,26 @@ filesystem to give [`RomImage.Open`](xref:TabulaSonora.Rom.RomImage.Open*) a pat
 reads out of a `ReadOnlyMemory<byte>` instead; nothing downstream can tell the difference, and the
 test suite asserts as much over every cached table and a slice of each wave-ROM bank.
 
+## What else the browser remembers
+
+Two preferences, both in `localStorage`, both tiny and neither derived from anything of Roland's: the
+colour theme under `tabula-sonora.theme`, and the engine's vintage and three effect toggles under
+`tabula-sonora.engine`. The second is written as `map,reverb,chorus,delay` — `3,1,1,0` is an SC-88Pro
+with the delay off — and read back strictly, a value that does not parse in every field being
+discarded whole rather than honoured in part.
+
+**The default is the absence of an entry.** Neither key exists until the user chooses something other
+than the default, "Restore defaults" removes the engine one again, and a value that stops parsing
+falls back rather than failing. So a visitor who never opens either control leaves nothing behind,
+and a change to what the defaults are reaches everyone who never overrode them. Storage access
+*throws* where a browser has disabled it, and a remembered preference is not worth failing a page
+over, so both directions swallow that and the page opens at its defaults instead.
+
+The engine settings are restored in `Program.cs` before `RunAsync`, alongside the effect presets and
+for a related reason: a DLL cached on a previous visit is loaded without asking, so applying the
+vintage afterwards would build a generator at SC-8820 and immediately replace it. Restoring first
+means the page opens in the remembered vintage rather than settling into it.
+
 ## Effects, and the one file that is shipped
 
 The reverb and chorus coefficients are computed by the real engine at start-up and are stored nowhere

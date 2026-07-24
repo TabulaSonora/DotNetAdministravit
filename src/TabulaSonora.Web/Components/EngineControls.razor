@@ -50,6 +50,17 @@
         <button class="btn btn-secondary" @onclick="() => Session.Panic()">Panic</button>
         <span class="note">Silences everything and returns every part to its power-on state.</span>
     </div>
+
+    @* Both secondary: the one orange button on this page belongs to the ROM picker, and to Play
+       once there is something to play. *@
+    <div class="row">
+        <button class="btn btn-secondary" @onclick="RestoreDefaults"
+                disabled="@(Session.Settings == EngineSettings.Default)">Restore defaults</button>
+        <span class="note">
+            The vintage and the three toggles are remembered in this browser. This puts them back to
+            SC-8820 with all three running, and forgets them.
+        </span>
+    </div>
 </section>
 
 @code {
@@ -60,6 +71,10 @@
             Session.Map = (ToneMap)map;
         }
     }
+
+    // Storing the defaults and storing nothing are the same state, so this really does leave the
+    // browser as it was before the panel was ever touched; EnginePreferences removes the entry.
+    private void RestoreDefaults() => Session.Settings = EngineSettings.Default;
 
     private static bool Truth(ChangeEventArgs e) => e.Value is bool value && value;
 }
