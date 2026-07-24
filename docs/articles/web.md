@@ -246,8 +246,10 @@ Two details that are load-bearing rather than incidental:
   plays, so a second of queued audio is also a second before a fader is heard to move. What makes
   40 ms safe is that filling is driven by the worklet's report on the audio clock rather than by a
   timer the browser can delay — the queue only has to cover the render itself, not a missed wake-up.
-  The starved-frame count and the realtime factor in the transport are how you would know it was too
-  short.
+  It is the *default* rather than a constant: the Audio panel makes it settable from 8 ms to a full
+  second, with the queue depth, the realtime factor and the starved-frame count beside it, because
+  where the floor actually is depends on the machine, the browser and how many voices are sounding.
+  Anything above zero starved frames means the device ran out and invented some.
 
 The position shown is the audible one — the renderer's position less whatever is still queued.
 Driving a progress bar from the renderer would show the song finishing a second before it is heard

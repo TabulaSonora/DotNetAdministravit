@@ -107,6 +107,11 @@ export function flush() {
     node?.port.postMessage({ command: 'flush' });
 }
 
+export function resetStarved() {
+    starved = 0;
+    node?.port.postMessage({ command: 'resetStarved' });
+}
+
 export function setGain(value) {
     if (gain) {
         gain.gain.value = value;

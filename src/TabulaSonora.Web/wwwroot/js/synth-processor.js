@@ -54,6 +54,14 @@ class SynthProcessor extends AudioWorkletProcessor {
             this.write = this.read = this.available = 0;
             this.phase = 0;
             this.playing = false;
+            return;
+        }
+
+        // Starvation is counted since the context opened, which is what you want for "has this ever
+        // dropped out" and exactly what you do not want while tuning the lead down: the count from
+        // the setting before last would sit there looking like the current one.
+        if (message.command === 'resetStarved') {
+            this.starved = 0;
         }
     }
 

@@ -115,6 +115,15 @@ public sealed class AudioOutput(IJSRuntime js) : IAsyncDisposable
     /// <summary>Discards everything queued — what a seek has to do.</summary>
     public async ValueTask FlushAsync() => await (await ModuleAsync()).InvokeVoidAsync("flush");
 
+    /// <summary>Zeroes the starved-frame count without disturbing what is playing.</summary>
+    /// <remarks>
+    /// The count is cumulative since the context opened, which is right for "has this ever dropped
+    /// out" and wrong for tuning the lead: a figure earned at a previous setting would sit there
+    /// looking like the current one.
+    /// </remarks>
+    public async ValueTask ResetStarvedAsync() =>
+        await (await ModuleAsync()).InvokeVoidAsync("resetStarved");
+
     /// <summary>Sets the output gain.</summary>
     /// <param name="gain">Linear gain.</param>
     public async ValueTask SetGainAsync(double gain) =>

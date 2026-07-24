@@ -1,0 +1,87 @@
+@implements IDisposable
+@inject PlaybackPump Pump
+@inject AudioOutput Audio
+
+@*
+    How far ahead the pump runs, and what that is costing.
+
+    The lead is the latency between a control moving and the change being heard, so the interesting
+    question is how low it will go before the device starves -- and that answer belongs to the machine
+    and the browser, not to a constant chosen here. The readouts are beside the control because a
+    number to lower it against is the whole point: starved frames say it has gone too far, and the
+    realtime factor says whether there was ever any headroom to spend.
+*@
+
+<section class="panel enter-rise">
+    <h2>Audio</h2>
+
+    <div class="row">
+        <label>
+            Buffer
+            <input type="range" min="@PlaybackPump.MinimumLeadFrames" max="@PlaybackPump.MaximumLeadFrames"
+                   step="@PlaybackPump.ChunkFrames" value="@Pump.LeadFrames" @oninput="LeadMoved" />
+            <span class="technical clock">@Milliseconds(Pump.LeadFrames) ms</span>
+        </label>
+
+        <button class="btn btn-secondary btn-tiny" @onclick="ResetAsync">Reset count</button>
+
+        <button class="btn btn-secondary btn-tiny"
+                disabled="@(Pump.LeadFrames == PlaybackPump.DefaultLeadFrames)"
+                @onclick="() => Pump.LeadFrames = PlaybackPump.DefaultLeadFrames">Default</button>
+    </div>
+
+    <div class="row readouts">
+        @if (Pump.Audio is { } audio)
+        {
+            <span class="tag tag-muted">@audio.SampleRate.ToString("N0") Hz@(audio.Resampling ? " (resampled)" : "")</span>
+            <span class="tag tag-muted">@Milliseconds(audio.Queued) ms queued</span>
+
+            @if (Pump.RealtimeFactor > 0)
+            {
+                <span class="tag @(Pump.RealtimeFactor < 1.5 ? "tag-warn" : "tag-success")">
+                    @Pump.RealtimeFactor.ToString("0.0")&times; realtime
+                </span>
+            }
+
+            @* The one that decides it. Anything above zero since the last reset means the device ran
+               out of audio and invented some, which is the dropout you are listening for. *@
+            <span class="tag @(audio.Starved > 0 ? "tag-error" : "tag-success")">
+                @audio.Starved starved frames
+            </span>
+        }
+        else
+        {
+            <span class="note">Nothing is playing yet, so there is nothing to measure.</span>
+        }
+    </div>
+
+    <p class="note">
+        Lowering this is what makes a fader or a key arrive sooner; the floor is set by how fast the
+        engine renders relative to how fast the device drains, so it moves with the machine, the
+        browser and how many voices are sounding. A change applies to the next top-up, so give it a
+        lead's worth of time before believing it. Not remembered between visits.
+    </p>
+</section>
+
+@code {
+    // The pump reports on its own poll, and the queue depth is only meaningful while it is running.
+    protected override void OnInitialized() => Pump.Tick += Redraw;
+
+    private void Redraw() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Pump.Tick -= Redraw;
+
+    private static int Milliseconds(int frames) => frames * 1000 / ToneGenerator.SampleRate;
+
+    private void LeadMoved(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var frames))
+        {
+            Pump.LeadFrames = Math.Clamp(
+                frames, PlaybackPump.MinimumLeadFrames, PlaybackPump.MaximumLeadFrames);
+        }
+    }
+
+    // Task rather than ValueTask: an event handler's return type is what Blazor binds against.
+    private async Task ResetAsync() => await Audio.ResetStarvedAsync();
+}

@@ -46,8 +46,24 @@ public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDis
     /// <summary>Frames rendered per pass — 8 ms at the engine's rate.</summary>
     public const int ChunkFrames = 256;
 
+    /// <summary>Shortest lead the control offers — 8 ms, one chunk.</summary>
+    public const int MinimumLeadFrames = ChunkFrames;
+
+    /// <summary>Longest lead the control offers — one second.</summary>
+    public const int MaximumLeadFrames = ToneGenerator.SampleRate;
+
     /// <summary>
-    /// Frames kept queued ahead of the device — 40 ms.
+    /// Frames kept queued ahead of the device. Settable, so the floor can be found by ear.
+    /// </summary>
+    /// <remarks>
+    /// Read afresh on every fill, so a change applies to the next top-up rather than the next note.
+    /// Lowering it does not drop what is already queued — the pump simply stops adding until the
+    /// device has drained to the new depth — so the effect of a change is heard within one lead.
+    /// </remarks>
+    public int LeadFrames { get; set; } = DefaultLeadFrames;
+
+    /// <summary>
+    /// The lead the pump starts at — 40 ms.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -65,7 +81,7 @@ public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDis
     /// the realtime factor are the readouts to check before deciding this is too short.
     /// </para>
     /// </remarks>
-    public const int LeadFrames = 1280;
+    public const int DefaultLeadFrames = 1280;
 
     /// <summary>
     /// How often the fallback loop wakes, for redraws and for when the worklet is not reporting.

@@ -33,25 +33,12 @@
         @* Status rather than prose, so these take the pill register. It also keeps a warning from
            reading as something to press: --warning is the brand orange, and as a filled chip it
            cannot be mistaken for the primary button. *@
+        @* The device's own readouts moved to the Audio panel, which is on both pages and sits beside
+           the control that changes them. What is left here is what belongs to the song. *@
         <div class="row readouts">
             <span class="technical clock">@Format(Elapsed) / @Format(Session.Song.Duration)</span>
             <span class="tag tag-muted">@Session.ActiveVoices of 64 voices</span>
             <span class="tag tag-muted">@Session.NoteCount notes</span>
-            @if (Pump.Audio is { } audio)
-            {
-                <span class="tag tag-muted">@audio.SampleRate.ToString("N0") Hz@(audio.Resampling ? " (resampled)" : "")</span>
-                <span class="tag @(audio.Queued < 4096 ? "tag-warn" : "tag-muted")">@((int)audio.Lead.TotalMilliseconds) ms ahead</span>
-                @if (Pump.RealtimeFactor > 0)
-                {
-                    <span class="tag @(Pump.RealtimeFactor < 1.5 ? "tag-warn" : "tag-success")">
-                        @Pump.RealtimeFactor.ToString("0.0")&times; realtime
-                    </span>
-                }
-                @if (audio.Starved > 0)
-                {
-                    <span class="tag tag-error">@audio.Starved starved frames</span>
-                }
-            }
         </div>
     }
 
