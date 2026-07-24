@@ -1,0 +1,31 @@
+# Deploy configuration for the browser build.
+#
+# The publish directory is a build output, not a checked-in folder, and pinning it here is a safety
+# measure as much as a convenience: the repository root contains `tables/` and
+# `src/TabulaSonora/Effects/presets.json`, both of which are Roland-derived and must never be served
+# publicly. Without this file a bare `netlify deploy` from the root would upload exactly those.
+#
+# There is deliberately no build command. The site is published by hand, because the build needs the
+# .NET SDK plus the `wasm-tools` workload for AOT — and AOT is not optional here: interpreted, the
+# engine runs at about 1x realtime and the audio starves. See docs/articles/web.md.
+#
+#   rm -rf src/TabulaSonora.Web/bin/Release/net10.0/publish
+#   dotnet publish -c Release src/TabulaSonora.Web
+#   netlify deploy --prod --dir=src/TabulaSonora.Web/bin/Release/net10.0/publish/wwwroot
+#
+# The delete is not housekeeping. Blazor fingerprints every asset by content hash, and `dotnet
+# publish` writes the new ones without removing the old, so publishing twice over the same directory
+# leaves both generations in wwwroot and the deploy uploads both. `index.html` pins one loader, so
+# the stale copies are never fetched by a browser -- but they are still served, and among them is a
+# complete previous build of the engine. Publishing repeatedly over one directory measured 164 files
+# and 64.1 MB against 140 files and 24.9 MB from a clean one.
+#
+# One page, no routing (see App.razor), so no SPA catch-all redirect is needed.
+
+[build]
+  publish = "src/TabulaSonora.Web/bin/Release/net10.0/publish/wwwroot"
+
+[[headers]]
+  for = "/_framework/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
