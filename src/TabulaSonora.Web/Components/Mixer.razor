@@ -8,25 +8,33 @@
     these take effect on the next block with no rebuild and no gap.
 *@
 
-<section class="panel">
+<section class="panel enter-rise">
     <h2>Mixer</h2>
 
+    @* Purple is the system's selected state, and an engaged mute or solo is exactly that: neither
+       the primary action nor a health signal. The letter is what tells the two apart. *@
     <div class="strips">
         @for (var channel = 0; channel < ChannelMask.ChannelCount; channel++)
         {
             var index = channel;
             <div class="strip @(Session.Channels.IsAudible(index) ? "" : "silent")">
                 <span class="label">@(index + 1)@(index == 9 ? " ⋅ drums" : "")</span>
-                <button class="tiny @(Session.Channels.IsMuted(index) ? "on" : "")"
-                        @onclick="() => Session.Channels.ToggleMuted(index)">M</button>
-                <button class="tiny @(Session.Channels.IsSoloed(index) ? "on" : "")"
-                        @onclick="() => Session.Channels.ToggleSoloed(index)">S</button>
+                <span class="buttons">
+                    <button class="btn btn-secondary btn-tiny"
+                            aria-pressed="@(Session.Channels.IsMuted(index) ? "true" : "false")"
+                            aria-label="@($"Mute channel {index + 1}")"
+                            @onclick="() => Session.Channels.ToggleMuted(index)">M</button>
+                    <button class="btn btn-secondary btn-tiny"
+                            aria-pressed="@(Session.Channels.IsSoloed(index) ? "true" : "false")"
+                            aria-label="@($"Solo channel {index + 1}")"
+                            @onclick="() => Session.Channels.ToggleSoloed(index)">S</button>
+                </span>
             </div>
         }
     </div>
 
     <div class="row">
-        <button class="secondary" @onclick="() => Session.Channels.Reset()">All on</button>
+        <button class="btn btn-secondary" @onclick="() => Session.Channels.Reset()">All on</button>
         <span class="note">
             A silenced channel contributes nothing at all &mdash; not to the dry mix, and not to the
             reverb, chorus or delay buses either, so muting a part also removes its tail.

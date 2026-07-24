@@ -68,7 +68,17 @@ and 25 MB from a clean publish. `netlify.toml` carries the deploy steps.
 
 Fully client-side: no back end, no `HttpClient` registered, and the user's DLL is cached in IndexedDB
 and never leaves the machine. `docs/articles/web.md` covers the audio path and why blocks cross to
-JavaScript as `byte[]` rather than `float[]`.
+JavaScript as `byte[]` rather than `float[]`. Deployed at <https://tabula-sonora.kddlb.cl>.
+
+The page is on the LoSnoCo design system. `wwwroot/css/losnoco.css` is a **verbatim** copy of that
+system's `colors_and_type.css` — do not edit it and do not re-declare its values; it is kept
+byte-identical so it can be diffed against the source and replaced wholesale when the system moves.
+Everything app-specific lives in `wwwroot/css/app.css` and reaches for `var(--…)` only, so no brand
+colour is written as a hex anywhere in the component tree. Two house rules bite in practice: at most
+one orange button is on screen at a time (the ROM picker before a DLL is loaded, Play after), and
+there are no emoji — the dismiss control in `index.html` is an inline SVG for that reason. The theme
+is applied by an inline script in `index.html` rather than a module, because it has to run before the
+first paint; `LSThemeToggle` calls back into it instead of keeping a second copy.
 
 Docs (DocFX is pinned as a local tool; never runs the engine, so it works on a clean clone):
 

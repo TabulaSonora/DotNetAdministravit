@@ -2,25 +2,27 @@
 @inject SynthSession Session
 @inject PlaybackPump Pump
 
-<section class="panel">
+<section class="panel enter-rise">
     <h2>Song</h2>
 
     <div class="row">
         <InputFile OnChange="LoadAsync" accept=".mid,.midi" />
         @if (Session.Song is { } loaded)
         {
-            <span class="note">@loaded.Name &mdash; @Format(loaded.Duration)</span>
+            <span class="technical">@loaded.Name &mdash; @Format(loaded.Duration)</span>
         }
     </div>
 
     @if (Session.Song is not null)
     {
+        @* Play is the page's single primary action once a ROM is loaded, so it is the only orange
+           button on screen; everything else here, and Render to WAV below, stays secondary. *@
         <div class="row transport">
-            <button @onclick="PlayAsync" disabled="@(Pump.State == TransportState.Playing && Pump.Mode == PlaybackMode.Song)">Play</button>
-            <button @onclick="PauseAsync" disabled="@(Pump.State != TransportState.Playing)">Pause</button>
-            <button class="secondary" @onclick="() => SeekAsync(0)">Rewind</button>
-            <button class="secondary" @onclick="() => NudgeAsync(-10)">&minus;10s</button>
-            <button class="secondary" @onclick="() => NudgeAsync(10)">+10s</button>
+            <button class="btn btn-primary" @onclick="PlayAsync" disabled="@(Pump.State == TransportState.Playing && Pump.Mode == PlaybackMode.Song)">Play</button>
+            <button class="btn btn-secondary" @onclick="PauseAsync" disabled="@(Pump.State != TransportState.Playing)">Pause</button>
+            <button class="btn btn-ghost" @onclick="() => SeekAsync(0)">Rewind</button>
+            <button class="btn btn-ghost" @onclick="() => NudgeAsync(-10)">&minus;10s</button>
+            <button class="btn btn-ghost" @onclick="() => NudgeAsync(10)">+10s</button>
         </div>
 
         <input type="range" class="scrub"
@@ -28,23 +30,26 @@
                value="@Pump.AudiblePosition"
                @onchange="ScrubAsync" />
 
+        @* Status rather than prose, so these take the pill register. It also keeps a warning from
+           reading as something to press: --warning is the brand orange, and as a filled chip it
+           cannot be mistaken for the primary button. *@
         <div class="row readouts">
-            <span class="clock">@Format(Elapsed) / @Format(Session.Song.Duration)</span>
-            <span class="note">@Session.ActiveVoices of 64 voices</span>
-            <span class="note">@Session.NoteCount notes</span>
+            <span class="technical clock">@Format(Elapsed) / @Format(Session.Song.Duration)</span>
+            <span class="tag tag-muted">@Session.ActiveVoices of 64 voices</span>
+            <span class="tag tag-muted">@Session.NoteCount notes</span>
             @if (Pump.Audio is { } audio)
             {
-                <span class="note">@audio.SampleRate.ToString("N0") Hz@(audio.Resampling ? " (resampled)" : "")</span>
-                <span class="note @(audio.Queued < 4096 ? "warn" : "")">@((int)audio.Lead.TotalMilliseconds) ms ahead</span>
+                <span class="tag tag-muted">@audio.SampleRate.ToString("N0") Hz@(audio.Resampling ? " (resampled)" : "")</span>
+                <span class="tag @(audio.Queued < 4096 ? "tag-warn" : "tag-muted")">@((int)audio.Lead.TotalMilliseconds) ms ahead</span>
                 @if (Pump.RealtimeFactor > 0)
                 {
-                    <span class="note @(Pump.RealtimeFactor < 1.5 ? "warn" : "")">
+                    <span class="tag @(Pump.RealtimeFactor < 1.5 ? "tag-warn" : "tag-success")">
                         @Pump.RealtimeFactor.ToString("0.0")&times; realtime
                     </span>
                 }
                 @if (audio.Starved > 0)
                 {
-                    <span class="warn">@audio.Starved starved frames</span>
+                    <span class="tag tag-error">@audio.Starved starved frames</span>
                 }
             }
         </div>

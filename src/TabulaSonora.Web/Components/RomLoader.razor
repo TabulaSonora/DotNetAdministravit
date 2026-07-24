@@ -8,33 +8,36 @@
     "drop a 27 MB file here" is otherwise a reasonable thing to be suspicious of.
 *@
 
-<section class="panel">
+<section class="panel enter-rise">
     <h2>Sound Canvas ROM</h2>
 
     @if (Session.Rom is { } rom)
     {
         <dl class="identity">
             <dt>file</dt>
-            <dd>@rom.Name</dd>
+            <dd class="technical">@rom.Name</dd>
             <dt>size</dt>
-            <dd>@rom.Size.ToString("N0") bytes</dd>
+            <dd class="technical">@rom.Size.ToString("N0") bytes</dd>
             <dt>sha-256</dt>
-            <dd class="hash">@rom.Sha256</dd>
+            <dd class="technical hash">@rom.Sha256</dd>
             <dt>checked</dt>
-            <dd>@(rom.Verified ? "full hash, this session" : "size and PE timestamp; hash taken when stored")</dd>
+            <dd class="technical">@(rom.Verified ? "full hash, this session" : "size and PE timestamp; hash taken when stored")</dd>
         </dl>
 
-        <p class="ok">Verified against the pinned build. Tables loaded.</p>
+        <div class="row">
+            <span class="tag tag-success">Verified against the pinned build</span>
+            <span class="note">Tables loaded.</span>
+        </div>
 
         <div class="row">
-            <button class="secondary" @onclick="ForgetAsync" disabled="@_busy">Forget stored DLL</button>
+            <button class="btn btn-secondary" @onclick="ForgetAsync" disabled="@_busy">Forget stored DLL</button>
             @if (_persistent)
             {
-                <span class="note">Storage is persistent.</span>
+                <span class="tag tag-muted">Storage is persistent</span>
             }
             else
             {
-                <span class="warn">Storage is best-effort; the browser may evict it.</span>
+                <span class="tag tag-warn">Storage is best-effort; the browser may evict it</span>
             }
         </div>
     }
@@ -46,8 +49,11 @@
             never uploaded.
         </p>
 
+        @* The one primary action while the page is still behind this gate. Once a ROM is loaded the
+           panel above replaces it and Play in the transport takes the orange. *@
         <div class="row">
-            <input type="file" accept=".dll" @ref="_input" @onchange="PickedAsync" disabled="@_busy" />
+            <input type="file" class="file-primary" accept=".dll"
+                   @ref="_input" @onchange="PickedAsync" disabled="@_busy" />
             @if (_busy)
             {
                 <span class="note">@_step</span>

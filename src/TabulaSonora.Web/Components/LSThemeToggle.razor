@@ -1,0 +1,48 @@
+@inject IJSRuntime Js
+
+@*
+    Auto, light or dark. Auto is the absence of a choice rather than a third palette: it removes the
+    data-theme attribute and lets prefers-color-scheme decide, which is what losnoco.css is written
+    around.
+
+    The work is all in the inline script in index.html, and deliberately so -- the theme has to be
+    applied before the first paint, which is long before this component, or Blazor itself, exists.
+    This calls back into that rather than keeping a second copy of the storage key and the apply
+    step. It is also why there is no service and no JS module here, unlike AudioOutput or MidiInput:
+    there is no state to hold, only the DOM and one localStorage entry.
+*@
+
+<div class="theme-toggle" role="group" aria-label="Colour theme">
+    @foreach (var (value, caption) in Choices)
+    {
+        var choice = value;
+        <button type="button"
+                class="theme-choice"
+                aria-pressed="@(_choice == choice ? "true" : "false")"
+                @onclick="() => ChooseAsync(choice)">
+            @caption
+        </button>
+    }
+</div>
+
+@code {
+    private static readonly (string Value, string Caption)[] Choices =
+    [
+        ("auto", "Auto"),
+        ("light", "Light"),
+        ("dark", "Dark"),
+    ];
+
+    private string _choice = "auto";
+
+    // Standalone WebAssembly does not prerender, so interop is available this early and the control
+    // renders in the right state first time rather than flicking into it after a frame.
+    protected override async Task OnInitializedAsync() =>
+        _choice = await Js.InvokeAsync<string>("tabulaTheme.get");
+
+    private async Task ChooseAsync(string choice)
+    {
+        _choice = choice;
+        await Js.InvokeVoidAsync("tabulaTheme.set", choice);
+    }
+}

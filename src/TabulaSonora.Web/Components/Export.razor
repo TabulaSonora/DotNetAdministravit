@@ -2,19 +2,21 @@
 @inject SynthSession Session
 @inject AudioOutput Audio
 
-<section class="panel">
+<section class="panel enter-rise">
     <h2>Export</h2>
 
+    @* Secondary, not primary: this matters, but Play is already holding the page's one orange
+       button and both are on screen at the same time. *@
     <div class="row">
-        <button @onclick="RunAsync" disabled="@(_running || Session.Song is null)">
+        <button class="btn btn-secondary" @onclick="RunAsync" disabled="@(_running || Session.Song is null)">
             @(_running ? "Rendering…" : "Render to WAV")
         </button>
 
         @if (_running)
         {
-            <button class="secondary" @onclick="() => _cancellation?.Cancel()">Cancel</button>
+            <button class="btn btn-ghost" @onclick="() => _cancellation?.Cancel()">Cancel</button>
             <progress max="1" value="@_progress"></progress>
-            <span class="note">@((int)(_progress * 100))%</span>
+            <span class="tag tag-muted">@((int)(_progress * 100))%</span>
         }
     </div>
 

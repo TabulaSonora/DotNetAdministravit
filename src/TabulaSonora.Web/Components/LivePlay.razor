@@ -8,17 +8,17 @@
     session renders straight from the generator, which is what these notes sound into.
 *@
 
-<section class="panel">
+<section class="panel enter-rise">
     <h2>Play it</h2>
 
     <div class="row">
         @if (!Midi.IsSupported)
         {
-            <span class="warn">This browser has no Web MIDI. The on-screen keyboard still works.</span>
+            <span class="tag tag-warn">This browser has no Web MIDI. The on-screen keyboard still works.</span>
         }
         else if (!Midi.IsOpen)
         {
-            <button class="secondary" @onclick="ConnectAsync">Connect MIDI input</button>
+            <button class="btn btn-secondary" @onclick="ConnectAsync">Connect MIDI input</button>
         }
         else
         {
@@ -32,10 +32,10 @@
                     }
                 </select>
             </label>
-            <span class="note">@Midi.Devices.Count device(s)</span>
+            <span class="tag tag-muted">@Midi.Devices.Count device(s)</span>
         }
 
-        <button class="secondary" @onclick="ArmAsync"
+        <button class="btn btn-secondary" @onclick="ArmAsync"
                 disabled="@(Pump.State == TransportState.Playing && Pump.Mode == PlaybackMode.Live)">
             Start audio
         </button>
@@ -75,7 +75,7 @@
             Velocity
             <input type="range" min="1" max="127" value="@_velocity"
                    @onchange="e => _velocity = int.TryParse(e.Value?.ToString(), out var v) ? v : _velocity" />
-            <span class="note">@_velocity</span>
+            <span class="technical">@_velocity</span>
         </label>
     </div>
 
