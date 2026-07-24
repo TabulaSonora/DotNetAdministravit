@@ -32,13 +32,15 @@ public enum TransportState
 /// <remarks>
 /// <para>
 /// The audio thread cannot call into .NET, so nothing pulls blocks out of the engine; this pushes them
-/// in, staying about a second ahead of the speaker. The engine renders far faster than realtime, so
-/// each wake-up does a few milliseconds of work and gives the thread straight back — which is what
-/// keeps the page responsive on the one thread WebAssembly gives us.
+/// in, staying a few tens of milliseconds ahead of the speaker. The engine renders far faster than
+/// realtime, so each wake-up does a fraction of a millisecond of work and gives the thread straight
+/// back — which is what keeps the page responsive on the one thread WebAssembly gives us.
 /// </para>
 /// <para>
-/// A lead of a second is deliberately generous. The cost of too much is a slow response to a seek,
-/// which is flushed anyway; the cost of too little is a dropout, which is audible and unrecoverable.
+/// How far ahead is a trade rather than a constant. Too much and every control — a fader, a key, a
+/// seek — is heard late by exactly that much; too little and the device runs dry, which is audible
+/// and unrecoverable. <see cref="LeadFrames"/> is therefore settable and the page puts the
+/// starved-frame count next to it, because where the floor sits belongs to the machine.
 /// </para>
 /// </remarks>
 public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDisposable
@@ -53,6 +55,16 @@ public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDis
     public const int MaximumLeadFrames = ToneGenerator.SampleRate;
 
     /// <summary>
+    /// The control's step: one millisecond, exactly, at the engine's rate.
+    /// </summary>
+    /// <remarks>
+    /// Not the chunk size. The lead is a threshold the fill loop compares against rather than a
+    /// quantity it adds, so any value is meaningful — and stepping by the chunk would make whole
+    /// millisecond settings, <see cref="DefaultLeadFrames"/> among them, unreachable on the slider.
+    /// </remarks>
+    public const int LeadStepFrames = ToneGenerator.SampleRate / 1000;
+
+    /// <summary>
     /// Frames kept queued ahead of the device. Settable, so the floor can be found by ear.
     /// </summary>
     /// <remarks>
@@ -63,7 +75,7 @@ public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDis
     public int LeadFrames { get; set; } = DefaultLeadFrames;
 
     /// <summary>
-    /// The lead the pump starts at — 40 ms.
+    /// The lead the pump starts at — 30 ms.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -74,14 +86,19 @@ public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDis
     /// cost of a deep queue, not just seek latency.
     /// </para>
     /// <para>
-    /// What makes 40 ms safe is that filling is driven by the worklet's report on the audio clock
-    /// rather than by a timer the browser can delay — see <see cref="OnQueueReportAsync"/>. The queue
-    /// only has to cover the render itself, and the engine renders a block in a small fraction of the
-    /// time that block lasts. Where it does not, the transport says so: the starved-frame count and
-    /// the realtime factor are the readouts to check before deciding this is too short.
+    /// What makes a lead this short safe is that filling is driven by the worklet's report on the
+    /// audio clock rather than by a timer the browser can delay — see <see cref="OnQueueReportAsync"/>.
+    /// The queue only has to cover the render itself, and the engine renders a block in a small
+    /// fraction of the time that block lasts.
+    /// </para>
+    /// <para>
+    /// 30 ms rather than the 40 this started at, and settled there by listening: the Audio panel makes
+    /// the lead adjustable precisely so the floor could be found on real hardware instead of assumed.
+    /// It is a default and not a limit — where the floor actually sits moves with the machine, the
+    /// browser and the polyphony, which is why the starved-frame count sits beside the control.
     /// </para>
     /// </remarks>
-    public const int DefaultLeadFrames = 1280;
+    public const int DefaultLeadFrames = 960;
 
     /// <summary>
     /// How often the fallback loop wakes, for redraws and for when the worklet is not reporting.
@@ -250,7 +267,7 @@ public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDis
     /// <param name="queued">Frames the worklet still holds.</param>
     /// <returns>A task that completes when the queue has been refilled.</returns>
     /// <remarks>
-    /// This, and not a timer, is what makes a 40 ms lead safe. A <c>setTimeout</c> is delayed by
+    /// This, and not a timer, is what makes a lead of a few tens of milliseconds safe. A <c>setTimeout</c> is delayed by
     /// whatever else the page is doing — a layout, a garbage collection, a background tab — so a
     /// timer-driven pump has to carry a queue deep enough to survive the worst of those, and that
     /// depth is latency the player feels on every key. The audio thread has no such problem: it

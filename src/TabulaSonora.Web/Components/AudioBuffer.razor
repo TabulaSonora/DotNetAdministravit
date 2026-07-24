@@ -19,7 +19,7 @@
         <label>
             Buffer
             <input type="range" min="@PlaybackPump.MinimumLeadFrames" max="@PlaybackPump.MaximumLeadFrames"
-                   step="@PlaybackPump.ChunkFrames" value="@Pump.LeadFrames" @oninput="LeadMoved" />
+                   step="@PlaybackPump.LeadStepFrames" value="@Pump.LeadFrames" @oninput="LeadMoved" />
             <span class="technical clock">@Milliseconds(Pump.LeadFrames) ms</span>
         </label>
 

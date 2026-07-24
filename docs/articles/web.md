@@ -240,11 +240,11 @@ Two details that are load-bearing rather than incidental:
 - **Blocks cross as a `byte[]`, not as two `float[]`.** Blazor marshals a `float[]` argument by
   serialising it to JSON, so pushing blocks the obvious way turns every sample into decimal text and
   parses it back — enough on its own to starve the device. Byte arrays have their own bulk transport.
-- **The lead is 40 ms, for a song as well as for live playing.** A song used to run a full second
+- **The lead is 30 ms, for a song as well as for live playing.** A song used to run a full second
   ahead, on the reasoning that the only cost of a deep queue was a slower response to a seek and a
   seek flushes the queue anyway. That was incomplete: the mixer changes a channel *while* the song
   plays, so a second of queued audio is also a second before a fader is heard to move. What makes
-  40 ms safe is that filling is driven by the worklet's report on the audio clock rather than by a
+  a lead this short safe is that filling is driven by the worklet's report on the audio clock rather than by a
   timer the browser can delay — the queue only has to cover the render itself, not a missed wake-up.
   It is the *default* rather than a constant: the Audio panel makes it settable from 8 ms to a full
   second, with the queue depth, the realtime factor and the starved-frame count beside it, because
