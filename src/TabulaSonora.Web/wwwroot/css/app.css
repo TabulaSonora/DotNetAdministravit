@@ -65,6 +65,22 @@ footer {
     font-size: .85rem;
 }
 
+/* The panel is dark, so the browser's default link blue is both illegible and off-palette. */
+a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+}
+
+a:hover, a:focus-visible {
+    border-bottom-color: var(--accent);
+}
+
+.colophon {
+    margin-bottom: 0;
+    color: var(--dim);
+}
+
 .booting {
     max-width: 26rem;
     margin: 6rem auto;
