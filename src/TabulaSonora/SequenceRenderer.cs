@@ -18,6 +18,15 @@ public sealed record RenderOptions
     /// <summary>MIDI channel routed to the drum path.</summary>
     public int DrumChannel { get; init; } = 9;
 
+    /// <summary>Which drum map row a program change on the drum part resolves against.</summary>
+    /// <remarks>
+    /// The counterpart of <see cref="Realtime.ToneGenerator.DrumMapRow"/>, and here for the same
+    /// reason it is there: the module derives the row from the part's internal bank code, which is
+    /// not reversed, so nothing in a MIDI file can reach the second map. Both renderers have to take
+    /// it the same way or a file would render differently through the two paths.
+    /// </remarks>
+    public int DrumMapRow { get; init; }
+
     /// <summary>
     /// Run the reverb on its send bus. On by default — the module always has it, and a GM reset
     /// leaves every part's reverb send at 40, so a dry render does not sound like the real thing.
@@ -252,7 +261,7 @@ public sealed class SequenceRenderer
             .Where(x => x.Note.Channel == options.DrumChannel)
             .OrderBy(x => x.Note.On))
         {
-            if (_notes.Drums.KitForProgram(note.Program) is { } resolved)
+            if (_notes.Drums.KitForProgram(note.Program, options.DrumMapRow) is { } resolved)
             {
                 current = resolved;
             }

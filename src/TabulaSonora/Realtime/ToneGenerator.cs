@@ -188,6 +188,31 @@ public sealed class ToneGenerator
     /// <summary>The voice allocator.</summary>
     public VoicePool Voices => _pool;
 
+    /// <summary>The drum kit in force, as the last program change on the drum part resolved it.</summary>
+    /// <remarks>
+    /// Worth reading rather than recomputing, because the two can differ: a program the map does not
+    /// define leaves the kit as it was, so <see cref="DrumKitTable.KitForProgram"/> over the part's
+    /// current program does not always answer what is actually loaded.
+    /// </remarks>
+    public int DrumKit => _drumKit;
+
+    /// <summary>Which drum map row a program change on the drum part resolves against.</summary>
+    /// <remarks>
+    /// <para>
+    /// Row 0 is the GM/GS map and the power-on value. The module does not take this from anywhere a
+    /// MIDI file can reach directly: it derives it from the part's <em>internal</em> bank code through
+    /// <see cref="DrumKitTable.MapRow"/>, and the translation from a bank select to that code is not
+    /// yet reversed. Until it is, the row is set by the host rather than inferred, which is the only
+    /// way the second map's kits can be sounded at all.
+    /// </para>
+    /// <para>
+    /// Deliberately <em>not</em> cleared by <see cref="Reset"/>. The kit is, because a program change
+    /// selects it and <see cref="Reset"/> undoes what MIDI did; the row is configuration, in the same
+    /// class as <see cref="ToneGeneratorOptions.Map"/>, which also survives.
+    /// </para>
+    /// </remarks>
+    public int DrumMapRow { get; set; }
+
     /// <summary>Silences everything and returns every part to its power-on state.</summary>
     public void Reset()
     {
@@ -278,7 +303,8 @@ public sealed class ToneGenerator
 
             case 0xC0:
                 part.Program = data1;
-                if (channel == _options.DrumChannel && _notes.Drums.KitForProgram(data1) is { } kit)
+                if (channel == _options.DrumChannel &&
+                    _notes.Drums.KitForProgram(data1, DrumMapRow) is { } kit)
                 {
                     // An undefined program leaves the current kit in place rather than falling back
                     // to Standard.

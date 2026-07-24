@@ -155,8 +155,8 @@ static int Render(ReadOnlySpan<string> args)
 {
     if (args.Length < 3)
     {
-        return Fail("render <SCCore.dll> <input.mid> <output.wav> [--map 1..4] [--tail SEC] " +
-                    "[--end SEC] [--stream] [--no-reverb] [--no-chorus] [--no-delay] " +
+        return Fail("render <SCCore.dll> <input.mid> <output.wav> [--map 1..4] [--drum-map 0|1] " +
+                    "[--tail SEC] [--end SEC] [--stream] [--no-reverb] [--no-chorus] [--no-delay] " +
                     "[--mute 1,2] [--solo 5,6]   (channels are 1-16)");
     }
 
@@ -174,6 +174,12 @@ static int Render(ReadOnlySpan<string> args)
             case "--stream": stream = true; break;
             case "--map":
                 options = options with { Map = (TabulaSonora.Patches.ToneMap)int.Parse(args[++i], CultureInfo.InvariantCulture) };
+                break;
+            // Not reachable from a MIDI file at all: the module picks the drum map from the part's
+            // internal bank code, and that translation is not reversed. This is the only way to hear
+            // the second map's kits outside the browser.
+            case "--drum-map":
+                options = options with { DrumMapRow = int.Parse(args[++i], CultureInfo.InvariantCulture) };
                 break;
             case "--tail":
                 options = options with { TailSeconds = double.Parse(args[++i], CultureInfo.InvariantCulture) };
@@ -370,6 +376,11 @@ static TabulaSonora.RenderResult RenderStreaming(
         DrumRingSeconds = options.DrumRingSeconds,
         Channels = options.Channels,
     });
+
+    // Not a ToneGeneratorOptions value: the row is settable while the engine runs, because it is what
+    // the module would have taken from a bank select. Carried over here so --stream and the offline
+    // path resolve the same kits from the same file.
+    generator.DrumMapRow = options.DrumMapRow;
 
     return TabulaSonora.Realtime.SequencePlayer
         .FromFile(generator, midiPath)
