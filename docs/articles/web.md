@@ -6,11 +6,14 @@ application. Not a demo of it and not a thin remote control over a server: the s
 compiled to WebAssembly and rendering into a Web Audio worklet.
 
 ```
+rm -rf src/TabulaSonora.Web/bin/Release/net10.0/publish
 dotnet publish -c Release src/TabulaSonora.Web
 ```
 
 Then serve `bin/Release/net10.0/publish/wwwroot` as static files. There is no back end and nothing to
-configure.
+configure. The delete matters: `dotnet publish` writes new content-hashed assets without removing the
+old ones, so republishing over the same directory leaves every previous generation sitting in
+`wwwroot` to be served alongside the current one.
 
 ## Fully client-side, in the strong sense
 
@@ -29,7 +32,7 @@ problem.** AOT compilation happens at publish, so a `dotnet run` build executes 
 interpreter — where it measures almost exactly **1× realtime**. The renderer and the music finish
 neck and neck, polyphony tips the balance, and the audio device starves.
 
-Published with AOT the same passage measures **10.9× realtime**, and the pump holds its full
+Published with AOT the same passage measures **tens of times realtime**, and the pump holds its full
 one-second lead with no starved frames at all. That is the difference between an instrument and a
 slideshow, so the project file turns `RunAOTCompilation` on for Release and the workload it needs is
 a prerequisite rather than an optimisation:
@@ -38,8 +41,15 @@ a prerequisite rather than an optimisation:
 dotnet workload install wasm-tools
 ```
 
-The transport shows the measured figure — `10.9× realtime` beside the queue depth — precisely so this
-question never has to be argued from impressions again. Below about 1.5× the reading turns amber.
+How many tens depends entirely on the machine, so no single number belongs here as a property of the
+engine. For scale: on a 24-core Windows desktop, Chrome, playing `canyon.mid` as SC-8820 with all
+three effects on and peaking at 50 of the 64 voices, the median reading was **48×** — 32× through the
+densest passage and over 100× through sparse ones, with no starved frames. A slower machine will read
+lower and the ratio between passages will stay much the same. What matters is the margin over 1×, not
+the figure.
+
+The transport shows the measured figure beside the queue depth, precisely so this question never has
+to be argued from impressions again. Below about 1.5× the reading turns amber.
 
 ## What the user has to supply
 

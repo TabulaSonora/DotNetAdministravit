@@ -49,14 +49,22 @@ dotnet run -c Release --project src/TabulaSonora.Player -- "<path>/SCCore.dll" s
 fastest way to A/B a single patch against the DLL.
 
 The browser build. **Publish, do not `dotnet run`** — AOT happens at publish, and without it the
-engine runs at about 1× realtime and the audio starves; with it, 10.9×. The transport shows the
-measured figure, so check that before theorising about dropouts.
+engine runs at about 1× realtime and the audio starves; with it, tens of times realtime. The absolute
+figure is machine-dependent, so do not treat any number here as a property of the engine: the
+transport shows the one actually measured, and that is what to read before theorising about dropouts.
 
 ```bash
 dotnet workload install wasm-tools      # once; AOT needs it
+rm -rf src/TabulaSonora.Web/bin/Release/net10.0/publish
 dotnet publish -c Release src/TabulaSonora.Web
 # then serve bin/Release/net10.0/publish/wwwroot as static files
 ```
+
+Delete the publish directory first. Blazor fingerprints assets by content hash and `dotnet publish`
+adds the new ones without removing the old, so republishing over the same directory accumulates every
+previous generation — including whole earlier builds of the engine. They are never loaded, since
+`index.html` pins one loader, but they are still there to be served: 164 files and 64 MB against 140
+and 25 MB from a clean publish. `netlify.toml` carries the deploy steps.
 
 Fully client-side: no back end, no `HttpClient` registered, and the user's DLL is cached in IndexedDB
 and never leaves the machine. `docs/articles/web.md` covers the audio path and why blocks cross to
