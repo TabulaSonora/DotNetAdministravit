@@ -17,6 +17,7 @@ try
         "render" => Render(args.AsSpan(1)),
         "prepare" => Prepare(args.AsSpan(1)),
         "render-note" => RenderNote(args.AsSpan(1)),
+        "bench" => Bench(args.AsSpan(1)),
         _ => Fail($"Unknown command '{args[0]}'."),
     };
 }
@@ -50,6 +51,10 @@ static void Usage()
 
           info <SCCore.dll>
               Print the build identity and the wave-ROM block map.
+
+          bench <SCCore.dll> [input.mid] [--iterations N]
+              Time the render path stage by stage. Reports each effect, one voice,
+              and -- given a MIDI file -- the offline renderer and the block loop.
 
           extract-tables <SCCore.dll> <output-directory>
               Write the 48 static tables as byte-for-byte .bin slices. The library reads
@@ -277,6 +282,36 @@ static string FindRepositoryRoot()
     }
 
     return Directory.GetCurrentDirectory();
+}
+
+static int Bench(ReadOnlySpan<string> args)
+{
+    if (args.Length == 0)
+    {
+        return Fail("bench <SCCore.dll> [input.mid] [--iterations N]");
+    }
+
+    var dllPath = args[0];
+    string? midiPath = null;
+    var iterations = 5;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--iterations": iterations = int.Parse(args[++i], CultureInfo.InvariantCulture); break;
+            default:
+                if (args[i].StartsWith('-'))
+                {
+                    return Fail($"Unknown option '{args[i]}'.");
+                }
+
+                midiPath = args[i];
+                break;
+        }
+    }
+
+    return TabulaSonora.Tools.Bencher.Run(dllPath, midiPath, iterations, Console.WriteLine);
 }
 
 static int RenderNote(ReadOnlySpan<string> args)
