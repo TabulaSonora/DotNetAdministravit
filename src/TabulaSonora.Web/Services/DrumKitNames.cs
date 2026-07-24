@@ -97,11 +97,43 @@ public sealed class DrumKitNames
         return names;
     }
 
+    /// <summary>The tone maps this file has a page for.</summary>
+    public IReadOnlyCollection<int> Maps => _pages.Keys;
+
+    /// <summary>The page every module carries, holding its own full kit set.</summary>
+    private const int DefaultPage = 0;
+
     /// <summary>Names the kit a program selects.</summary>
     /// <param name="map">Tone map index the kit set belongs to.</param>
     /// <param name="program">Program number on the drum part.</param>
     /// <returns>The name, or <see langword="null"/> if this file does not name it.</returns>
+    /// <remarks>
+    /// Falls back to the file's Default page, and to that page only. In <c>SCVSC.drf</c> it is the
+    /// same 37 kits as the SC-8820 page, so a file whose per-map pages are missing still names
+    /// everything; but walking every page in turn would let an SC-55 page answer for an SC-8820 kit
+    /// and hand back "STANDARD" where the right answer is "STANDARD 1". A slightly wrong name is
+    /// worse than a program number, because a program number does not claim to be a name.
+    /// </remarks>
     public string? Lookup(int map, int program) =>
+        Page(map, program) ?? (map == DefaultPage ? null : Page(DefaultPage, program));
+
+    /// <summary>How many of a set's kits this file can name.</summary>
+    /// <param name="map">Tone map index the kit set belongs to.</param>
+    /// <param name="programs">The programs that select the set's kits.</param>
+    /// <returns>How many of them are named.</returns>
+    /// <remarks>
+    /// What the panel reports. A file that parses but names nothing for the set on screen is the one
+    /// failure this format makes easy — <c>GM.drf</c> sits in the same folder, is accepted by the same
+    /// file filter, and holds a single page naming a single kit — and silence there looks exactly like
+    /// the feature not working.
+    /// </remarks>
+    public int CountFor(int map, IEnumerable<int> programs)
+    {
+        ArgumentNullException.ThrowIfNull(programs);
+        return programs.Count(program => Lookup(map, program) is not null);
+    }
+
+    private string? Page(int map, int program) =>
         _pages.TryGetValue(map, out var page) && page.TryGetValue(program, out var name) ? name : null;
 
     private Dictionary<int, string> PageFor(int map)

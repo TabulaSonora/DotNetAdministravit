@@ -65,8 +65,26 @@
         <div class="row">
             @if (_names is { IsEmpty: false } loaded)
             {
-                <span class="tag tag-success">@loaded.Count kit names from @loaded.Module</span>
+                var named = loaded.CountFor(
+                    RowMaps[Session.DrumMapRow], catalogue.Kits.Select(k => k.Programs[0]));
+
+                @* Named, and named FOR THIS SET. A file can parse, report a healthy count and still
+                   answer nothing here -- GM.drf is one page naming one kit -- and a bare success tag
+                   over a column of program numbers is indistinguishable from the feature being
+                   broken. So the count that matters is the one on screen. *@
+                <span class="tag @(named == 0 ? "tag-warn" : "tag-success")">
+                    @named of @catalogue.Kits.Count named from @loaded.Module
+                </span>
                 <button class="btn btn-secondary btn-tiny" @onclick="ForgetNamesAsync">Forget</button>
+
+                @if (named == 0)
+                {
+                    <span class="note">
+                        That file has no page for this kit set &mdash; it names @loaded.Count kit(s)
+                        across @loaded.Maps.Count page(s). <code>GM.drf</code> is the small one;
+                        <code>SCVSC.drf</code>, in the same folder, is the one that names all of them.
+                    </span>
+                }
             }
             else
             {
@@ -75,9 +93,11 @@
                     <input type="file" accept=".drf" @ref="_picker" @onchange="NamesPickedAsync" />
                 </label>
                 <span class="note">
-                    Optional: <code>SCVSC.drf</code>, beside your <code>SCCore.dll</code>. Kits are
-                    known by their program number until you supply it, because the names are in that
-                    file rather than in the engine. It is read and kept in this browser, like the DLL.
+                    Optional: <code>SCVSC.drf</code> &mdash; not <code>GM.drf</code>, which sits beside
+                    it and names almost nothing &mdash; from the folder holding your
+                    <code>SCCore.dll</code>. Kits are known by their program number until you supply
+                    it, because the names are in that file rather than in the engine. It is read and
+                    kept in this browser, like the DLL.
                 </span>
             }
 

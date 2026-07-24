@@ -60,12 +60,44 @@ public class DrumKitNamesTests
         // A different page is a different map, and the same program can be named differently in each.
         Assert.Equal("STANDARD", names.Lookup(map: 1, program: 0));
 
-        // Blank rows are gaps, not empty names; unknown programs and maps are simply absent.
+        // Blank rows are gaps, not empty names, and an unknown program stays unknown.
         Assert.Null(names.Lookup(map: 4, program: 9));
         Assert.Null(names.Lookup(map: 4, program: 42));
-        Assert.Null(names.Lookup(map: 3, program: 0));
 
         Assert.Equal(4, names.Count);
+        Assert.Equal(new[] { 1, 4 }, names.Maps.Order());
+    }
+
+    [Fact]
+    public void FallsBackToTheDefaultPageAndNoFurther()
+    {
+        var names = DrumKitNames.Parse(Encoding.Latin1.GetBytes(
+            Sample.Replace("PAGE=4\t8820Drum", "PAGE=0\tDefault", StringComparison.Ordinal)));
+
+        // A map with no page of its own is answered by the module's Default page, which carries its
+        // full kit set.
+        Assert.Equal("STANDARD 1", names.Lookup(map: 4, program: 0));
+        Assert.Equal("STANDARD 1", names.Lookup(map: 3, program: 0));
+
+        Assert.Equal("CM-64/32L", names.Lookup(map: 2, program: 127));
+
+        // But never by another map's page. The SC-55 page here names program 0 "STANDARD"; a map
+        // with no page of its own must get the Default page's "STANDARD 1", not that, because a
+        // subtly wrong name is worse than a program number -- a program number does not claim to be
+        // a name. The SC-55 page still answers for itself.
+        Assert.Equal("STANDARD 1", names.Lookup(map: 2, program: 0));
+        Assert.Equal("STANDARD", names.Lookup(map: 1, program: 0));
+    }
+
+    [Fact]
+    public void CountsWhatItCanNameForOneSet()
+    {
+        var names = DrumKitNames.Parse(Encoding.Latin1.GetBytes(Sample));
+
+        // The figure the panel reports, because a file can parse, hold names, and still answer
+        // nothing for the set on screen.
+        Assert.Equal(3, names.CountFor(map: 4, [0, 8, 127, 9, 42]));
+        Assert.Equal(0, names.CountFor(map: 2, [0, 8, 127]));
     }
 
     [Fact]
@@ -96,5 +128,31 @@ public class DrumKitNamesTests
         // later pages leave out.
         Assert.Equal("STANDARD", names.Lookup(map: 1, program: 0));
         Assert.Equal("CM-64/32L", names.Lookup(map: 1, program: 127));
+
+        // The SC-8820 page carries the full set the drum map's row 0 holds.
+        Assert.Equal(37, names.CountFor(map: 4, Enumerable.Range(0, 128)));
+
+        // Program 127 is the one kit the ROM defines on both rows and no page names, so it stays a
+        // program number however this file is read.
+        Assert.Null(names.Lookup(map: 4, program: 127));
+        Assert.Null(names.Lookup(map: 3, program: 127));
+    }
+
+    [SkippableFact]
+    public void TheGmFileIsNotTheOneWithTheNames()
+    {
+        var gm = Path.Combine(
+            Path.GetDirectoryName(TestData.SccorePath ?? string.Empty) ?? string.Empty, "GM.drf");
+        Skip.IfNot(File.Exists(gm), "GM.drf not found beside SCCore.dll.");
+
+        var names = DrumKitNames.Parse(File.ReadAllBytes(gm));
+
+        // It parses, it reports a module, and it names exactly one kit of the thirty-odd on screen.
+        // That combination is why the panel counts what it can name for the SET rather than in
+        // total: this file sits in the same folder as the right one and passes the same file filter,
+        // and "1 of 38" is the only thing that tells them apart at a glance.
+        Assert.False(names.IsEmpty);
+        Assert.Equal(1, names.CountFor(map: 4, Enumerable.Range(0, 128)));
+        Assert.Equal(1, names.CountFor(map: 3, Enumerable.Range(0, 128)));
     }
 }
