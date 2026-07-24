@@ -4,12 +4,14 @@
 @inject PlaybackPump Pump
 
 @*
-    Every melodic sound the loaded ROM holds for the selected vintage, not the 128 of bank 0.
+    Every melodic sound the loaded ROM holds, as three columns that narrow: the vintage, then the
+    instrument, then the variants of that instrument the vintage defines.
 
-    A bank select picks a variation, and where a variation has no entry for a program the module
-    sounds bank 0's capital tone rather than falling silent. Both are shown, and told apart: a slot
-    that says "as bank 0" is real and playable, but it is not this bank's own sound, and a list that
-    hid the difference would claim every vintage has 128 programs in every bank.
+    Columns rather than a bank rail and a grid of 128, because the grid had the hierarchy upside
+    down. A bank is not a place you go to find a sound -- most of its slots are the capital tone
+    showing through, so browsing bank 8 means reading 128 entries of which a handful are its own.
+    Asking "which banks define a variation of THIS instrument" is the question a player actually has,
+    and the answer is usually two or three lines rather than 128.
 *@
 
 <section class="panel enter-rise">
@@ -30,19 +32,23 @@
     else
     {
         <div class="row">
-            <span class="tag tag-muted">@ToneCatalog.VintageName(Session.Map)</span>
-            <span class="tag tag-muted">@catalogue.Banks.Count banks</span>
-            <span class="tag tag-muted">@catalogue.NativeCount.ToString("N0") programs</span>
-            <span class="tag tag-muted">@catalogue.ToneCount.ToString("N0") distinct tones</span>
-
             <label>
                 Search
                 <input type="search" value="@_search" @oninput="Searched" placeholder="piano, strings, 88…" />
             </label>
+
+            @if (_search.Length == 0)
+            {
+                <span class="tag tag-muted">@catalogue.Banks.Count banks</span>
+                <span class="tag tag-muted">@catalogue.NativeCount.ToString("N0") programs</span>
+                <span class="tag tag-muted">@catalogue.ToneCount.ToString("N0") distinct tones</span>
+            }
         </div>
 
         @if (_search.Length > 0)
         {
+            @* Searching is the one time the hierarchy is in the way: a name can be anywhere, so the
+               columns collapse to a flat list of everything that matches. *@
             var hits = Search(catalogue).ToList();
 
             <p class="note">@hits.Count match@(hits.Count == 1 ? "" : "es")@(hits.Count == SearchLimit ? ", showing the first " + SearchLimit : "").</p>
@@ -60,38 +66,62 @@
         }
         else
         {
-            @* Resolved rather than read from the field: switching vintage can take the selected bank
-               out of existence, and the catalogue's answer is the one the buttons must agree with. *@
-            var showing = Bank(catalogue);
+            var variants = Variants(catalogue, Program);
 
-            <div class="banks">
-                @foreach (var bank in catalogue.Banks)
-                {
-                    var number = bank.Bank;
-                    <button class="bank @(number == showing.Bank ? "on" : "")" @onclick="() => _bank = number">
-                        <span class="technical">@number</span>
-                        <span class="count">@bank.NativeCount</span>
-                    </button>
-                }
-            </div>
+            <div class="miller">
+                <div class="column">
+                    <div class="column-head">Vintage</div>
+                    @foreach (var map in Enum.GetValues<ToneMap>())
+                    {
+                        var vintage = map;
+                        <button class="item @(vintage == Session.Map ? "on" : "")"
+                                @onclick="() => Session.Map = vintage">
+                            <span class="name">@ToneCatalog.VintageName(vintage)</span>
+                            <span class="technical">@(Catalog.For(vintage)?.Banks.Count ?? 0)</span>
+                        </button>
+                    }
+                </div>
 
-            <div class="programs">
-                @foreach (var entry in showing.Programs)
-                {
-                    var program = entry.Program;
-                    <button class="program @Kind(entry) @(Selected(showing.Bank, program) ? "on" : "")"
-                            disabled="@(!entry.Playable)"
-                            title="@Explain(entry)"
-                            @onclick="() => SelectAsync(showing.Bank, program)">
-                        <span class="technical">@(program + 1)</span>
-                        <span class="name">@entry.Name</span>
-                    </button>
-                }
+                <div class="column">
+                    <div class="column-head">Instrument</div>
+                    @foreach (var entry in catalogue.Banks[0].Programs)
+                    {
+                        @* The capital bank is the instrument list: it is the only bank every vintage
+                           fills completely, so it is the one that names all 128 without holes. *@
+                        var program = entry.Program;
+
+                        if (program % ToneCatalog.FamilySize == 0)
+                        {
+                            <div class="group">@ToneCatalog.FamilyOf(program)</div>
+                        }
+
+                        <button class="item @(program == Program ? "on" : "")"
+                                @onclick="() => OpenAsync(program)">
+                            <span class="technical">@(program + 1)</span>
+                            <span class="name">@entry.Name</span>
+                        </button>
+                    }
+                </div>
+
+                <div class="column">
+                    <div class="column-head">Variant</div>
+                    @foreach (var variant in variants)
+                    {
+                        var bank = variant.Bank;
+                        <button class="item @(Selected(bank, Program) ? "on" : "")"
+                                @onclick="() => SelectAsync(bank, Program)">
+                            <span class="technical">@bank</span>
+                            <span class="name">@variant.Entry.Name</span>
+                        </button>
+                    }
+                </div>
             </div>
 
             <p class="note">
-                @showing.NativeCount of 128 programs are bank @showing.Bank's own; the rest sound bank
-                0's capital tone, which is what the module does with a variation it never filled in.
+                @ToneCatalog.VintageName(Session.Map) defines
+                @(variants.Count == 1 ? "only the capital tone" : $"{variants.Count} variations") of program
+                @(Program + 1). Bank 0 is the capital; a bank not listed has no entry for this
+                program and would sound the capital anyway.
             </p>
         }
     }
@@ -109,10 +139,18 @@
     /// </remarks>
     public const int SearchLimit = 120;
 
-    private int _bank;
+    private int? _browsing;
     private string _search = string.Empty;
 
     private readonly record struct Hit(int Bank, CatalogEntry Entry);
+
+    private readonly record struct Variant(int Bank, CatalogEntry Entry);
+
+    // Which instrument the third column is showing. Not a field on its own: with nothing browsed yet
+    // it follows the part, so opening the panel shows the variants of whatever is actually sounding
+    // rather than of program 1.
+    private int Program =>
+        _browsing ?? (Session.Parts is { } parts ? parts[Channel].Program : 0);
 
     // The picker follows the engine rather than remembering its own idea of what is selected: a
     // program change from hardware, from a song or from another panel moves the highlight too.
@@ -122,13 +160,19 @@
 
     public void Dispose() => Session.Changed -= Redraw;
 
-    private CatalogBank Bank(VintageCatalog catalogue) =>
-        catalogue.Banks.FirstOrDefault(b => b.Bank == _bank) ?? catalogue.Banks[0];
-
     private bool Selected(int bank, int program) =>
         Session.Parts is { } parts && parts[Channel].Bank == bank && parts[Channel].Program == program;
 
     private void Searched(ChangeEventArgs e) => _search = e.Value?.ToString()?.Trim() ?? string.Empty;
+
+    // Every bank that defines this program itself. A bank whose slot is a capital fallback is left
+    // out on purpose: it would sound identical to bank 0, so listing it would pad the column with
+    // rows that are all the same sound.
+    private static List<Variant> Variants(VintageCatalog catalogue, int program) =>
+        [.. from bank in catalogue.Banks
+            let entry = bank.Programs[program]
+            where entry.Kind == CatalogEntryKind.Native
+            select new Variant(bank.Bank, entry)];
 
     // Number as well as name, because "88" is how a bank is looked for and a program is as often
     // known by its number as by what it is called.
@@ -141,6 +185,15 @@
                  bank.Bank.ToString() == _search)
          select new Hit(bank.Bank, entry)).Take(SearchLimit);
 
+    // Opening an instrument sounds its capital tone as well as listing its variants. A column that
+    // only narrowed the next one would leave the middle click silent, and the point of the panel is
+    // to hear things.
+    private Task OpenAsync(int program)
+    {
+        _browsing = program;
+        return SelectAsync(bank: 0, program);
+    }
+
     private async Task SelectAsync(int bank, int program)
     {
         // Bank first, then program: a program change is what latches the pair, so the other order
@@ -148,25 +201,7 @@
         Session.SendControl(Channel, 0, bank);
         Session.SendChannel(0xC0 | Channel, program, 0);
 
-        _bank = bank;
+        _browsing = program;
         await Pump.ArmForKeysAsync();
     }
-
-    private static string Kind(CatalogEntry entry) => entry.Kind switch
-    {
-        CatalogEntryKind.Native => "native",
-        CatalogEntryKind.CapitalFallback => "fallback",
-        CatalogEntryKind.IndirectOnly => "indirect",
-        _ => "empty",
-    };
-
-    private static string Explain(CatalogEntry entry) => entry.Kind switch
-    {
-        CatalogEntryKind.Native => $"tone #{entry.Tone}",
-        CatalogEntryKind.CapitalFallback => $"not defined in this bank; sounds bank 0's {entry.Name}",
-        CatalogEntryKind.IndirectOnly =>
-            "defined, but reachable only as an alternate articulation in mono mode — a program " +
-            "change to it sounds nothing",
-        _ => "nothing here",
-    };
 }

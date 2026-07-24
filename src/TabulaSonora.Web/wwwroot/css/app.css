@@ -578,12 +578,10 @@ p.note {
 /* ── Catalog: banks, programs, kits, pads ───────────────────────────────────── */
 
 /*
-    Four grids of the same cell, differing only in how wide the cell has to be to hold what is in it.
-    All of them are hairline-separated the way the mixer is, so the catalog reads as one instrument's
-    front panel rather than as four unrelated lists.
+    Grids of the same cell, differing only in how wide the cell has to be to hold what is in it. All
+    of them are hairline-separated the way the mixer is, so the catalog reads as one instrument's
+    front panel rather than as unrelated lists.
 */
-.banks,
-.programs,
 .hits,
 .kits,
 .pads {
@@ -596,13 +594,136 @@ p.note {
     overflow: hidden;
 }
 
-.banks {
-    grid-template-columns: repeat(auto-fill, minmax(4rem, 1fr));
-}
-
-.programs,
 .hits {
     grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+}
+
+/* ── Miller columns ─────────────────────────────────────────────────────────── */
+
+/*
+    Vintage, then instrument, then variant: each column narrows what the next one shows. The three
+    scroll independently and share one height, which is what makes them read as one browser rather
+    than three stacked lists -- and the instrument column is the tall one, so that height is set by
+    what is comfortable to scan there.
+
+    Deliberately NOT auto-fitting the columns to their content. A column that resized as you moved
+    through it would shift the other two under the pointer.
+*/
+.miller {
+    display: grid;
+    grid-template-columns: minmax(8rem, 0.8fr) minmax(11rem, 1.4fr) minmax(9rem, 1fr);
+    gap: 1px;
+    height: 22rem;
+    margin: var(--space-sm) 0;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+}
+
+/* Three columns do not survive a phone. Stacked, each keeps its own scroll and a third of the
+   height, so the relationship between them is still legible. */
+@media (max-width: 640px) {
+    .miller {
+        grid-template-columns: 1fr;
+        height: auto;
+    }
+
+    .miller > .column {
+        max-height: 14rem;
+    }
+}
+
+.column {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+    background: var(--surface);
+}
+
+/* Sticky so the column keeps saying what it is once it has been scrolled. Same register as a panel
+   heading, which is what it is. */
+.column-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 0.35rem var(--space-sm);
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-size: var(--text-label);
+    font-weight: 700;
+    letter-spacing: var(--tracking-label);
+    text-transform: uppercase;
+}
+
+/* The GM families. Sticky too, so scrolling the middle column always shows which family the rows
+   under the pointer belong to -- the grouping is only useful if it is visible from inside it. */
+.group {
+    position: sticky;
+    top: 1.75rem;
+    padding: 0.25rem var(--space-sm);
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-size: var(--text-caption);
+    font-weight: 700;
+    letter-spacing: var(--tracking-caption);
+}
+
+.column > .group:first-of-type {
+    border-top: 0;
+}
+
+.item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    flex: none;
+    margin: 0;
+    padding: 0.25rem var(--space-sm);
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: var(--text-caption);
+    text-align: left;
+    cursor: pointer;
+}
+
+.item:hover {
+    background: var(--surface-2);
+}
+
+.item.on,
+.item.on:hover {
+    background: var(--purple);
+    color: var(--white);
+}
+
+.item .technical {
+    color: var(--muted);
+    flex: none;
+}
+
+.item.on .technical {
+    color: var(--white);
+}
+
+.item .name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Flush inside the clipped, rounded browser; an offset ring would be cut off by it. */
+.item:focus-visible {
+    outline-offset: -2px;
 }
 
 .kits {
@@ -613,8 +734,6 @@ p.note {
     grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
 }
 
-.bank,
-.program,
 .hit,
 .kit,
 .pad {
@@ -633,22 +752,17 @@ p.note {
     cursor: pointer;
 }
 
-.bank,
 .kit {
     justify-content: space-between;
 }
 
-.bank:hover:not(:disabled),
-.program:hover:not(:disabled),
-.hit:hover:not(:disabled),
-.kit:hover:not(:disabled),
-.pad:hover:not(:disabled) {
+.hit:hover,
+.kit:hover,
+.pad:hover {
     background: var(--surface-2);
 }
 
 /* Flush inside a rounded, clipped grid; an offset ring would be cut off by the container. */
-.bank:focus-visible,
-.program:focus-visible,
 .hit:focus-visible,
 .kit:focus-visible,
 .pad:focus-visible {
@@ -657,20 +771,14 @@ p.note {
 
 /* Same reasoning as the mixer's mute: purple is the system's selected state, and what is selected
    here is neither an action nor a health signal. */
-.bank.on,
-.program.on,
 .hit.on,
 .kit.on,
-.bank.on:hover,
-.program.on:hover,
 .hit.on:hover,
 .kit.on:hover {
     background: var(--purple);
     color: var(--white);
 }
 
-.bank .technical,
-.program .technical,
 .hit .technical,
 .kit .technical,
 .pad .technical {
@@ -678,9 +786,8 @@ p.note {
     flex: none;
 }
 
-/* How much is in a bank or a kit. Right-aligned against the identifier by the space-between above,
-   so the two read as a label and its measurement rather than as two labels. */
-.bank .count,
+/* How many keys are in a kit. Right-aligned against the identifier by the space-between above, so
+   the two read as a label and its measurement rather than as two labels. */
 .kit .count {
     color: var(--muted);
     font-family: var(--font-mono-qp);
@@ -688,38 +795,17 @@ p.note {
     flex: none;
 }
 
-.bank.on .technical,
-.program.on .technical,
 .hit.on .technical,
 .kit.on .technical,
-.bank.on .count,
 .kit.on .count {
     color: var(--white);
 }
 
-.program .name,
 .hit .name,
 .pad .name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-/*
-    A slot the bank does not define itself. It is playable -- the module sounds bank 0's capital tone
-    -- but it is not this bank's own sound, and showing it identically would claim the bank is fuller
-    than it is. Italic and muted rather than a badge, so 128 of them do not shout.
-*/
-.program.fallback {
-    color: var(--muted);
-    font-style: italic;
-}
-
-.program.indirect,
-.program.empty {
-    color: var(--muted);
-    opacity: 0.5;
-    cursor: default;
 }
 
 /* A pad is a fixed grid of one-shot triggers, so it does not carry a selected state; the kit above it

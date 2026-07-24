@@ -54,6 +54,14 @@ of four things:
 - **indirect-only**, carrying the `0x8000` marker;
 - **unassigned**.
 
+The browser is three Miller columns — vintage, then instrument, then variant — and that order is the
+point. A bank is not a place a player goes to find a sound: most of its 128 slots are the capital tone
+showing through, so browsing bank 8 means reading 128 entries of which a handful are its own. The
+question worth asking is *which banks define a variation of this instrument*, and the answer is
+usually two or three lines. The instrument column is the capital bank, which is the only one every
+vintage fills completely, grouped by the sixteen General MIDI families — a layout of program numbers
+from the spec, not from the ROM, so the names in it are still the vintage's own.
+
 The bank counts are the vintages themselves: 15 for the SC-55, 24 for the SC-88, 45 for the SC-88Pro,
 51 for the SC-8820. Not one indirect-only word is reachable from any of those four maps — the 1 164
 in the table sit in LUT3 rows only `Dereference` visits, through an alternate-articulation entry

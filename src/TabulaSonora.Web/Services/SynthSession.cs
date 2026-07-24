@@ -431,8 +431,15 @@ public sealed class SynthSession : IDisposable
         }
 
         var position = _player?.Position ?? 0;
+        var previous = _engine?.Parts;
 
         _engine = new ToneGenerator(_notes, Options()) { DrumMapRow = _drumMapRow };
+
+        if (previous is not null)
+        {
+            Restore(previous);
+        }
+
         _player = Song is null ? null : new SequencePlayer(_engine, Song.Events);
 
         // Put the new generator back where the old one was, so changing vintage mid-song resumes
@@ -440,6 +447,44 @@ public sealed class SynthSession : IDisposable
         if (position > 0)
         {
             _player?.Seek(position);
+        }
+    }
+
+    /// <summary>
+    /// Carries the parts' settings across a rebuild, by sending the messages that made them.
+    /// </summary>
+    /// <param name="previous">The outgoing generator's parts.</param>
+    /// <remarks>
+    /// <para>
+    /// A rebuild makes sixteen fresh <see cref="Part"/> objects at their power-on values, and without
+    /// this a vintage change would silently reset every channel to program 1 at bank 0. That is the
+    /// first column of the instrument browser, so it is also the most likely thing anyone clicks:
+    /// choosing a sound and then comparing it across the four modules would put the sound back to
+    /// piano every time.
+    /// </para>
+    /// <para>
+    /// Sent as MIDI rather than copied field by field, so the new parts are configured through the
+    /// same path a controller or a file uses — the drum kit comes back with the program change, and
+    /// nothing here has to know what else a program change does. Voices are still lost; only the
+    /// settings survive.
+    /// </para>
+    /// </remarks>
+    private void Restore(IReadOnlyList<Part> previous)
+    {
+        for (var channel = 0; channel < previous.Count; channel++)
+        {
+            var part = previous[channel];
+
+            // Bank before program, as anything selecting a sound must: the program change is what
+            // latches the pair.
+            SendControl(channel, 0, part.Bank);
+            _engine!.SendChannel(0xC0 | channel, part.Program, 0);
+
+            SendControl(channel, 7, part.Volume);
+            SendControl(channel, 10, part.Pan);
+            SendControl(channel, 11, part.Expression);
+            SendControl(channel, 91, part.ReverbSend);
+            SendControl(channel, 93, part.ChorusSend);
         }
     }
 

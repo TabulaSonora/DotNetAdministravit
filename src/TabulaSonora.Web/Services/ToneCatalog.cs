@@ -87,6 +87,28 @@ public sealed class ToneCatalog(SynthSession session)
     /// <returns>The name, middle C being <c>C4</c>.</returns>
     public static string NoteName(int note) => $"{Names[note % 12]}{(note / 12) - 1}";
 
+    /// <summary>The General MIDI family a program number falls in.</summary>
+    /// <param name="program">Program number, 0–127.</param>
+    /// <returns>The family's name.</returns>
+    /// <remarks>
+    /// General MIDI lays its 128 programs out as sixteen families of eight, and that layout is the
+    /// spec's rather than this ROM's — no table in the DLL carries it. It is a grouping of program
+    /// <em>numbers</em>, so it holds whatever the vintage names those programs; the names themselves
+    /// still come from the tone table.
+    /// </remarks>
+    public static string FamilyOf(int program) => Families[program / 8];
+
+    /// <summary>How many programs share a family.</summary>
+    public const int FamilySize = 8;
+
+    private static readonly string[] Families =
+    [
+        "Piano", "Chromatic percussion", "Organ", "Guitar",
+        "Bass", "Strings", "Ensemble", "Brass",
+        "Reed", "Pipe", "Synth lead", "Synth pad",
+        "Synth effects", "Ethnic", "Percussive", "Sound effects",
+    ];
+
     // Loading a different DLL builds a new NoteRenderer and so a new directory; nothing else does.
     // Comparing the instance is therefore a complete invalidation test, and it costs a reference
     // compare rather than a subscription to an event that also fires for songs and settings.
