@@ -156,13 +156,6 @@ public sealed class NoteRenderer
             foreach (var sounding in resolved.Partials)
             {
                 var descriptor = sounding.Descriptor;
-                if (descriptor.Reverse)
-                {
-                    // Reverse waves need the engine's alternate register setup, which the static
-                    // descriptor does not describe; skipping matches the reference.
-                    continue;
-                }
-
                 var partial = tone.Partials[sounding.PartialIndex];
                 var signal = RenderPartial(
                     toneNumber, partial, descriptor, note, velocity,
@@ -225,11 +218,6 @@ public sealed class NoteRenderer
         foreach (var sounding in resolved.Partials)
         {
             var descriptor = sounding.Descriptor;
-            if (descriptor.Reverse)
-            {
-                continue;
-            }
-
             var partial = tone.Partials[sounding.PartialIndex];
             var signal = RenderPartial(
                 key.Tone, partial, descriptor, note: 60, velocity,

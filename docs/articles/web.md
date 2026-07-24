@@ -79,6 +79,12 @@ list and row 1's is exactly the SC-88Pro's — established by comparing them aga
 per-vintage kit pages — with one addition each row carries and neither list mentions: the CM-64/32L
 kit at program 128.
 
+The reverse-cymbal and SFX kits work. 218 wave descriptors are marked to play backwards and the drum
+kits reach 167 of them; they used to render silence, because both renderers skipped the partial
+outright. The wave is simply the ordinary data read from the far end back, which the sampler now does
+by turning the decoded buffer round — so both renderers get it at once, having only the one sampler
+between them.
+
 Keys are named from the melodic tone table, because drum sounds *are* melodic tones. Kit names are a
 different matter: the DLL has none — it will tell you that program 9's key 36 is a `Room Kick 1`, but
 nothing in it says program 9 is `ROOM`. Those names are carried in `DrumKitNames`, transcribed from

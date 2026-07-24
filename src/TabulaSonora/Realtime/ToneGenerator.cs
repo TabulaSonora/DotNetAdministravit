@@ -676,13 +676,6 @@ public sealed class ToneGenerator
             foreach (var sounding in resolved.Partials)
             {
                 var descriptor = sounding.Descriptor;
-                if (descriptor.Reverse)
-                {
-                    // Reverse waves need the engine's alternate register setup, which the static
-                    // descriptor does not describe.
-                    continue;
-                }
-
                 var partial = tone.Partials[sounding.PartialIndex];
                 var wave = _notes.Sampler.Decode(descriptor);
                 if (wave is null)
@@ -756,11 +749,6 @@ public sealed class ToneGenerator
         foreach (var sounding in resolved.Partials)
         {
             var descriptor = sounding.Descriptor;
-            if (descriptor.Reverse)
-            {
-                continue;
-            }
-
             var partial = tone.Partials[sounding.PartialIndex];
             var wave = _notes.Sampler.Decode(descriptor);
             if (wave is null)

@@ -48,6 +48,17 @@ public sealed record DecodedWave(float[] Samples, int[] Steps, int LoopStart, in
 
     /// <summary>Whether a forward loop is actually in effect.</summary>
     public bool IsLooping => Mode == SamplerMode.Loop && DataEnd > LoopStart + 1 && LoopBuffer is not null;
+
+    /// <summary>
+    /// Whether <see cref="Samples"/> has been turned round because the wave plays backwards.
+    /// </summary>
+    /// <remarks>
+    /// Playback does not consult this: the samples are already in the order they are read, so a
+    /// reverse wave is an ordinary one-shot from here on. It is recorded because a buffer that no
+    /// longer matches the order <see cref="Steps"/> is in would otherwise be silently confusing —
+    /// the steps stay forward, and nothing that reads them applies to a reverse wave.
+    /// </remarks>
+    public bool Reversed { get; init; }
 }
 
 /// <summary>
@@ -111,6 +122,26 @@ public sealed class Sampler
         }
 
         var loopStart = Math.Max(0, descriptor.End - alignedLoop);
+
+        // A reverse wave is the same data read the other way, so it is turned round here rather than
+        // given a downward-walking read path. Two things fall out of that. Both renderers get it at
+        // once, because they share this sampler and neither knows the difference; and the seam
+        // problems that make the engine's own backwards walk delicate do not arise, because the
+        // predictor is integrated forward exactly as for any other wave and only the finished
+        // samples are reversed.
+        //
+        // Playing one is always a one-shot. Statically 202 of the 218 reverse descriptors already
+        // collapse end onto start, and the engine reconfigures the rest to match: every reverse wave
+        // the harness captured came back with its loop point above its end, which is the register
+        // setup for running downward once. See ReverseWavesUseDifferentRuntimeRegistersThanTheStaticDescriptor.
+        if (descriptor.Reverse)
+        {
+            Array.Reverse(samples);
+            return new DecodedWave(samples, steps, loopStart, sampleCount, SamplerMode.OneShot)
+            {
+                Reversed = true,
+            };
+        }
 
         // The descriptor's loop flag is NOT what gates looping: it reads zero for piano, so trusting
         // it makes held notes run out as one-shots. What decides is whether a sustain region exists.
