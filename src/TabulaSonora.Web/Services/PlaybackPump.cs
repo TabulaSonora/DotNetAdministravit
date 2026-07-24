@@ -43,22 +43,29 @@ public enum TransportState
 /// </remarks>
 public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDisposable
 {
-    /// <summary>Frames rendered per pass while a song is playing — 128 ms at the engine's rate.</summary>
-    public const int SongChunkFrames = 4096;
+    /// <summary>Frames rendered per pass — 8 ms at the engine's rate.</summary>
+    public const int ChunkFrames = 256;
 
-    /// <summary>Frames kept queued ahead of the device while a song is playing.</summary>
-    public const int SongLeadFrames = ToneGenerator.SampleRate;
-
-    /// <summary>Frames rendered per pass when playing live — 8 ms.</summary>
-    public const int LiveChunkFrames = 256;
-
-    /// <summary>Frames kept queued ahead of the device when playing live — 40 ms.</summary>
+    /// <summary>
+    /// Frames kept queued ahead of the device — 40 ms.
+    /// </summary>
     /// <remarks>
-    /// The floor is set by how late the pump can wake, not by how fast it renders: the loop is driven
-    /// by a timer the browser is free to delay, so the queue has to cover a missed wake-up. Below
-    /// about a poll interval and a half this trades audible latency for audible dropouts.
+    /// <para>
+    /// One lead for both modes, and it is the short one. A song used to run a full second ahead on the
+    /// reasoning that the only cost was a slow response to a seek, which flushes the queue anyway.
+    /// That reasoning was incomplete: the mixer changes a channel <em>while</em> the song plays, and a
+    /// second of queued audio is a second before the fader is heard to move. Control latency is the
+    /// cost of a deep queue, not just seek latency.
+    /// </para>
+    /// <para>
+    /// What makes 40 ms safe is that filling is driven by the worklet's report on the audio clock
+    /// rather than by a timer the browser can delay — see <see cref="OnQueueReportAsync"/>. The queue
+    /// only has to cover the render itself, and the engine renders a block in a small fraction of the
+    /// time that block lasts. Where it does not, the transport says so: the starved-frame count and
+    /// the realtime factor are the readouts to check before deciding this is too short.
+    /// </para>
     /// </remarks>
-    public const int LiveLeadFrames = 1280;
+    public const int LeadFrames = 1280;
 
     /// <summary>
     /// How often the fallback loop wakes, for redraws and for when the worklet is not reporting.
@@ -69,12 +76,10 @@ public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDis
     /// </remarks>
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
 
-    // One pair per mode rather than one pair sliced, because the arrays are marshalled to JavaScript
-    // whole: a slice would mean a copy on every push, hundreds of times a second when playing live.
-    private readonly float[] _songLeft = new float[SongChunkFrames];
-    private readonly float[] _songRight = new float[SongChunkFrames];
-    private readonly float[] _liveLeft = new float[LiveChunkFrames];
-    private readonly float[] _liveRight = new float[LiveChunkFrames];
+    // Marshalled to JavaScript whole, so these are reused rather than sliced: a slice would mean a
+    // copy on every push, hundreds of times a second.
+    private readonly float[] _left = new float[ChunkFrames];
+    private readonly float[] _right = new float[ChunkFrames];
 
     private CancellationTokenSource? _cancellation;
     private Task? _loop;
@@ -143,9 +148,9 @@ public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDis
     /// <returns>A task that completes when the device is ready to be played into.</returns>
     /// <remarks>
     /// What every control that can sound a note calls before sounding it — nothing is audible until a
-    /// context exists, and a browser only starts one inside a gesture. The exception is the point: a
-    /// running song must not be reduced to a 40 ms lead just because a key was pressed over it, so
-    /// while one plays, live notes ride its buffer and arrive late instead.
+    /// context exists, and a browser only starts one inside a gesture. The exception is that a running
+    /// song stays the thing being rendered: a key pressed over it plays into the same generator and
+    /// needs no mode change, and switching would flush the song's queue mid-bar.
     /// </remarks>
     public Task ArmForKeysAsync() =>
         Mode == PlaybackMode.Song && State == TransportState.Playing
@@ -159,8 +164,9 @@ public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDis
             return;
         }
 
-        // Switching modes changes how much is buffered, so what is already queued is the wrong
-        // length by definition and has to go.
+        // Both modes queue the same depth now, so this is no longer about buffer length: what is
+        // queued belongs to the other mode. Arming live over a stopped song would otherwise play out
+        // the song's tail under the first key.
         if (Mode != mode && audio.IsStarted)
         {
             await audio.FlushAsync();
@@ -268,16 +274,9 @@ public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDis
 
     private async Task FillAsync(int queued)
     {
-        // How far ahead the pump runs is not one number. A song wants a generous lead: the only cost
-        // is a slower response to a seek, which flushes the queue anyway, and the benefit is that no
-        // scheduling hiccup can reach the speaker. Live playing wants the opposite, because there the
-        // lead IS the latency between pressing a key and hearing it.
         var live = Mode == PlaybackMode.Live;
-        var lead = live ? LiveLeadFrames : SongLeadFrames;
-        var left = live ? _liveLeft : _songLeft;
-        var right = live ? _liveRight : _songRight;
 
-        while (queued < lead)
+        while (queued < LeadFrames)
         {
             if (!live && session.SongComplete)
             {
@@ -287,19 +286,19 @@ public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDis
             _renderTime.Start();
             if (live)
             {
-                session.RenderLive(left, right);
+                session.RenderLive(_left, _right);
             }
             else
             {
-                session.RenderSong(left, right);
+                session.RenderSong(_left, _right);
             }
 
             _renderTime.Stop();
 
-            _renderedFrames += left.Length;
-            await audio.PushAsync(left, right);
+            _renderedFrames += _left.Length;
+            await audio.PushAsync(_left, _right);
 
-            queued += left.Length;
+            queued += _left.Length;
         }
 
         Measure();

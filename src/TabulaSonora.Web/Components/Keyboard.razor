@@ -2,6 +2,10 @@
     An on-screen keyboard for playing without hardware. Pointer events rather than mouse events, so
     it works under a finger as well as a cursor, and pointer capture is released on down so that
     dragging across the keys glissandos instead of holding the first one.
+
+    How far down the key the pointer lands is the velocity, which is the nearest a mouse gets to
+    playing dynamics: near the pivot at the top is soft, at the front edge is as hard as the panel's
+    ceiling allows.
 *@
 
 <div class="keyboard" @onpointerleave="ReleaseAll">
@@ -30,17 +34,35 @@
     [Parameter]
     public int Keys { get; set; } = 25;
 
-    /// <summary>Velocity every key sends.</summary>
+    /// <summary>The velocity a strike at the very front of a key sends.</summary>
     [Parameter]
-    public int Velocity { get; set; } = 100;
+    public int Velocity { get; set; } = 127;
 
-    /// <summary>Raised on key down, with the MIDI note.</summary>
+    /// <summary>Raised on key down, with the MIDI note and the velocity its position implies.</summary>
     [Parameter]
-    public EventCallback<int> NoteOn { get; set; }
+    public EventCallback<Strike> NoteOn { get; set; }
 
     /// <summary>Raised on key up, with the MIDI note.</summary>
     [Parameter]
     public EventCallback<int> NoteOff { get; set; }
+
+    /// <summary>One key struck.</summary>
+    /// <param name="Note">MIDI note number.</param>
+    /// <param name="Velocity">Velocity, from how far down the key the pointer landed.</param>
+    public readonly record struct Strike(int Note, int Velocity);
+
+    /// <summary>
+    /// White and black key heights in CSS pixels, mirroring <c>--key-height</c> and
+    /// <c>--key-height-black</c> in <c>app.css</c>.
+    /// </summary>
+    /// <remarks>
+    /// A pointer event carries where in the element it landed but not how big the element is, and
+    /// asking the browser per strike would put an interop round trip in front of every note. So the
+    /// two agree by hand: change these and change the stylesheet.
+    /// </remarks>
+    private const double WhiteHeight = 128;
+
+    private const double BlackHeight = 80;
 
     private readonly HashSet<int> _held = [];
 
@@ -51,13 +73,23 @@
             return;
         }
 
-        await NoteOn.InvokeAsync(note);
+        await NoteOn.InvokeAsync(new Strike(note, VelocityAt(note, e)));
+    }
+
+    // Down the key is harder, which is the way a struck key behaves and the way every on-screen
+    // keyboard that offers this reads it. OffsetY is relative to the key because the key has no
+    // element children -- its label is a bare text node.
+    private int VelocityAt(int note, PointerEventArgs e)
+    {
+        var depth = e.OffsetY / (IsBlack(note) ? BlackHeight : WhiteHeight);
+        return Math.Clamp((int)Math.Round(depth * Velocity), 1, 127);
     }
 
     private async Task EnterAsync(int note, PointerEventArgs e)
     {
         // Buttons is a bitmask of what is currently pressed; zero means the pointer is only passing
-        // over, which must not sound a note.
+        // over, which must not sound a note. A glissando takes its velocity from the height the
+        // pointer is dragged at, so leaning into the keys mid-run gets louder.
         if (e.Buttons != 0)
         {
             await DownAsync(note, e);

@@ -25,9 +25,8 @@ The application is two routes, because it is two instruments:
 | `/` | the **player**: load a Standard MIDI File, drive the transport, mix it while it runs, render it to WAV |
 | `/live` | the **instrument**: a controller or the on-screen keyboard, every sound the ROM holds, and the drum maps |
 
-The split is not cosmetic. `PlaybackPump` already buffers the two cases in opposite directions — a second ahead for a song, 40 ms for live playing,
-because there the lead *is* the latency between a key and a sound — so the pages simply stop
-pretending those are one activity.
+The split is not cosmetic: loading a file and driving a transport has nothing in common with
+connecting a controller and playing, and each was burying the other's panels.
 
 Nothing about the engine is routed. Every service is a singleton owned by the layout, so navigating
 changes which panels are on screen and nothing else: the ROM stays loaded, a playing song keeps
@@ -75,10 +74,22 @@ part's *internal* bank code, which is not reversed here, so
 [`ToneGenerator.DrumMapRow`](xref:TabulaSonora.Realtime.ToneGenerator.DrumMapRow) is set by the host
 instead — without it the second map's kits cannot be sounded at all.
 
-Kits are labelled by the programs that select them and keys by the tone they sound, because that is
-all there is to read: the DLL carries no kit-name or drum-key-name table. Those names live in the
-plugin's companion `.tnf`/`.drk` tone files, which this project does not read, and a list saying
-"Room" or "Power" here would be a name the application invented rather than one it found.
+The two rows are not abstract A and B. The set of programs row 0 defines is exactly the SC-8820's kit
+list and row 1's is exactly the SC-88Pro's — established by comparing them against the plugin's own
+per-vintage kit pages — with one addition each row carries and neither list mentions: the CM-64/32L
+kit at program 128.
+
+Keys are named from the melodic tone table, because drum sounds *are* melodic tones. Kit names are a
+different matter: the DLL has none, and they live in the plugin's companion `SCVSC.drf`, which is
+Roland's file and not this repository's to carry. So the page reads the user's own copy, optionally
+and exactly as it reads the user's own DLL — without it, kits are known by the program that selects
+them. Inventing "Room" or "Power" here would be writing down a name the application never found.
+
+Banks **126 and 127** are not variations at all but the CM-64 compatibility map, so that a file
+written for Roland's older Computer Music modules plays: 127 is the LA half (MT-32 / CM-32L) and 126
+the PCM half (CM-32P). The ROM agrees with the documentation on both — bank 127's 128 programs carry
+MT-32 tone names rather than Sound Canvas ones, and bank 126 holds exactly the CM-32P's 64 — and both
+are identical across all four vintages, as a map belonging to no generation should be.
 
 ## Mixing while it plays
 
@@ -217,9 +228,14 @@ Two details that are load-bearing rather than incidental:
 - **Blocks cross as a `byte[]`, not as two `float[]`.** Blazor marshals a `float[]` argument by
   serialising it to JSON, so pushing blocks the obvious way turns every sample into decimal text and
   parses it back — enough on its own to starve the device. Byte arrays have their own bulk transport.
-- **The lead is not one number.** A song runs a second ahead, because the only cost of a generous
-  lead is a slower response to a seek and a seek flushes the queue anyway. Live playing runs 40 ms
-  ahead, because there the lead *is* the latency between pressing a key and hearing it.
+- **The lead is 40 ms, for a song as well as for live playing.** A song used to run a full second
+  ahead, on the reasoning that the only cost of a deep queue was a slower response to a seek and a
+  seek flushes the queue anyway. That was incomplete: the mixer changes a channel *while* the song
+  plays, so a second of queued audio is also a second before a fader is heard to move. What makes
+  40 ms safe is that filling is driven by the worklet's report on the audio clock rather than by a
+  timer the browser can delay — the queue only has to cover the render itself, not a missed wake-up.
+  The starved-frame count and the realtime factor in the transport are how you would know it was too
+  short.
 
 The position shown is the audible one — the renderer's position less whatever is still queued.
 Driving a progress bar from the renderer would show the song finishing a second before it is heard

@@ -66,8 +66,10 @@
             </select>
         </label>
 
+        @* A ceiling rather than the velocity itself: how hard a key or a pad is struck comes from
+           where on it the pointer landed, and this is what the hardest strike sends. *@
         <label>
-            Velocity
+            Max velocity
             <input type="range" min="1" max="127" value="@Velocity" @oninput="VelocityMoved" />
             <span class="technical">@Velocity</span>
         </label>
@@ -87,9 +89,9 @@
     [Parameter]
     public EventCallback<int> ChannelChanged { get; set; }
 
-    /// <summary>The velocity every key sends.</summary>
+    /// <summary>The velocity a strike at the front of a key sends.</summary>
     [Parameter]
-    public int Velocity { get; set; } = 100;
+    public int Velocity { get; set; } = 127;
 
     /// <summary>Raised when the velocity is changed here.</summary>
     [Parameter]
@@ -161,10 +163,10 @@
             ? VelocityChanged.InvokeAsync(velocity)
             : Task.CompletedTask;
 
-    private async Task NoteOn(int note)
+    private async Task NoteOn(Keyboard.Strike strike)
     {
         await ArmAsync();
-        Session.SendChannel(0x90 | Channel, note, Velocity);
+        Session.SendChannel(0x90 | Channel, strike.Note, strike.Velocity);
     }
 
     private void NoteOff(int note) => Session.SendChannel(0x80 | Channel, note, 0);

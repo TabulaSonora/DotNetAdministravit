@@ -109,9 +109,14 @@
                     {
                         var bank = variant.Bank;
                         <button class="item @(Selected(bank, Program) ? "on" : "")"
+                                title="@ToneCatalog.BankName(bank)"
                                 @onclick="() => SelectAsync(bank, Program)">
                             <span class="technical">@bank</span>
                             <span class="name">@variant.Entry.Name</span>
+                            @if (ToneCatalog.BankName(bank) is { } label)
+                            {
+                                <span class="badge">@label</span>
+                            }
                         </button>
                     }
                 </div>

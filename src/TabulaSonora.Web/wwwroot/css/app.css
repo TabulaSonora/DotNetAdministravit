@@ -26,7 +26,16 @@
     --key-white-ink: #8A8781;
     --key-black: #16211F;
 
+    /*
+        In pixels, and mirrored as constants in Keyboard.razor and DrumKitBrowser.razor, because a
+        strike's velocity comes from where on the control the pointer landed and the browser gives
+        the component an offset without giving it the element's size. Change one, change the other --
+        the components name these variables in the comment that holds their copy.
+    */
     --key-width: 34px;
+    --key-height: 128px;
+    --key-height-black: 80px;
+    --pad-width: 112px;
 
     /* Light theme: the system's own values already read correctly. See the dark block below. */
     --error-ink: var(--error);
@@ -583,12 +592,32 @@ p.note {
     front panel rather than as unrelated lists.
 */
 .hits,
-.kits,
-.pads {
+.kits {
     display: grid;
     gap: 1px;
     margin: var(--space-sm) 0;
     background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+}
+
+/*
+    The pads are the one grid whose cells must NOT stretch: a strike's velocity is where across the
+    pad it landed, and the component works that out from an offset and a width it cannot measure. So
+    the track is exactly --pad-width and the component holds the same number.
+
+    That leaves a ragged edge where the last row does not fill, which is why this one draws its
+    hairlines as a shadow on each cell instead of as a background showing through the gaps -- an
+    unfilled track would otherwise be a stripe of border colour.
+*/
+.pads {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, var(--pad-width));
+    gap: 1px;
+    margin: var(--space-sm) 0;
+    padding: 1px;
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-card);
     overflow: hidden;
@@ -726,12 +755,38 @@ p.note {
     outline-offset: -2px;
 }
 
+/* What a bank is, where it is not a variation at all -- the CM-64 compatibility pair. Muted and
+   small, because it qualifies the row rather than competing with the tone's name. */
+.item .badge {
+    flex: none;
+    padding: 0 0.3rem;
+    border-radius: var(--radius-tag);
+    background: var(--surface-3);
+    color: var(--muted);
+    font-size: var(--text-caption);
+    white-space: nowrap;
+}
+
+.item.on .badge {
+    background: color-mix(in srgb, var(--white) 25%, transparent);
+    color: var(--white);
+}
+
 .kits {
     grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
 }
 
-.pads {
-    grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
+.pad {
+    box-shadow: 0 0 0 1px var(--border);
+}
+
+/*
+    The pad's own children must not be hit targets. The offset a pointer event carries is relative to
+    whatever it landed on, so a click that hit the name span would measure across the span and read
+    as a much harder strike than it was.
+*/
+.pad > * {
+    pointer-events: none;
 }
 
 .hit,
@@ -802,6 +857,7 @@ p.note {
 }
 
 .hit .name,
+.kit .name,
 .pad .name {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -828,7 +884,7 @@ progress {
 /* Absolutely positioned so the black keys can sit over the whites they fall between. */
 .keyboard {
     position: relative;
-    height: 8rem;
+    height: var(--key-height);
     margin-top: var(--space-md);
     user-select: none;
     touch-action: none;
@@ -853,7 +909,7 @@ progress {
 
 .key.white {
     width: var(--key-width);
-    height: 8rem;
+    height: var(--key-height);
     background: var(--key-white);
     border: 1px solid var(--border-strong);
     color: var(--key-white-ink);
@@ -868,7 +924,7 @@ progress {
 
 .key.black {
     width: calc(var(--key-width) * 0.6);
-    height: 5rem;
+    height: var(--key-height-black);
     background: var(--key-black);
     border: 1px solid var(--key-black);
     z-index: 2;

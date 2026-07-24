@@ -87,6 +87,29 @@ public sealed class ToneCatalog(SynthSession session)
     /// <returns>The name, middle C being <c>C4</c>.</returns>
     public static string NoteName(int note) => $"{Names[note % 12]}{(note / 12) - 1}";
 
+    /// <summary>What a bank is, where it is something other than a variation of the capital tone.</summary>
+    /// <param name="bank">Bank select MSB.</param>
+    /// <returns>The bank's name, or <see langword="null"/> for an ordinary variation bank.</returns>
+    /// <remarks>
+    /// <para>
+    /// The top two banks are not variations at all: they are the module's CM-64 compatibility map, so
+    /// that a file written for Roland's older Computer Music modules plays. 127 is the LA half — the
+    /// MT-32 / CM-32L side — and 126 is the PCM half, the CM-32P side.
+    /// </para>
+    /// <para>
+    /// The ROM agrees with the documentation on both counts. Bank 127 holds 128 programs whose tones
+    /// carry MT-32 names (<c>Acou Piano1</c>, <c>Elec Piano1</c>) rather than Sound Canvas ones, and
+    /// bank 126 holds exactly 64 — the CM-32P's tone count. Both are identical across all four
+    /// vintages, as a compatibility map that belongs to no generation should be.
+    /// </para>
+    /// </remarks>
+    public static string? BankName(int bank) => bank switch
+    {
+        126 => "CM-64 PCM",
+        127 => "CM-64 LA · MT-32",
+        _ => null,
+    };
+
     /// <summary>The General MIDI family a program number falls in.</summary>
     /// <param name="program">Program number, 0–127.</param>
     /// <returns>The family's name.</returns>

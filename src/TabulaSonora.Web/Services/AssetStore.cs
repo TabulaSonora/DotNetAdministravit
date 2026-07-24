@@ -26,6 +26,9 @@ public sealed class AssetStore(IJSRuntime js) : IAsyncDisposable
     /// <summary>Storage key for a user-supplied <c>presets.json</c>.</summary>
     public const string PresetsKey = "presets";
 
+    /// <summary>Storage key for a user-supplied <c>SCVSC.drf</c>, which names the drum kits.</summary>
+    public const string DrumNamesKey = "drumnames";
+
     /// <summary>Upper bound on a stream read out of storage; the DLL is 27 MB.</summary>
     private const long MaxAssetBytes = 64L * 1024 * 1024;
 

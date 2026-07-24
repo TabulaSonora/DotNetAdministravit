@@ -22,6 +22,11 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\TabulaSonora\TabulaSonora.csproj" />
     <ProjectReference Include="..\..\src\TabulaSonora.Player\TabulaSonora.Player.csproj" />
+    <!--
+      For the browser build's pure-logic pieces only — the tone-file parser. Nothing here starts
+      Blazor; the WebAssembly SDK's output is an ordinary assembly and this reads one type out of it.
+    -->
+    <ProjectReference Include="..\..\src\TabulaSonora.Web\TabulaSonora.Web.csproj" />
   </ItemGroup>
 
   <!--

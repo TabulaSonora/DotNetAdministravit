@@ -25,7 +25,11 @@
 
 @code {
     private int _channel;
-    private int _velocity = 100;
+
+    // The ceiling a strike at the very front of a key, or the far right of a pad, reaches. Full by
+    // default: the dynamics come from where the pointer lands, and starting capped would make the
+    // whole keyboard quiet for no reason the panel explains.
+    private int _velocity = 127;
 
     protected override void OnInitialized() => Session.Changed += Redraw;
 
