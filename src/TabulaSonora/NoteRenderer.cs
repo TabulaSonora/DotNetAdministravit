@@ -175,12 +175,9 @@ public sealed class NoteRenderer
                 }
 
                 var (gainLeft, gainRight) = _pan.Gains(partial.Pan + (partPan - 0x40));
-                for (var i = 0; i < sampleCount; i++)
-                {
-                    left[i] += (float)(signal[i] * gainLeft);
-                    right[i] += (float)(signal[i] * gainRight);
-                    mono[i] += signal[i];
-                }
+                Simd.MixScaled(signal, gainLeft, left);
+                Simd.MixScaled(signal, gainRight, right);
+                Simd.Add(signal, mono);
             }
         }
 
@@ -244,22 +241,18 @@ public sealed class NoteRenderer
                 continue;
             }
 
-            for (var i = 0; i < sampleCount; i++)
-            {
-                mono[i] += signal[i];
-            }
+            Simd.Add(signal, mono);
         }
 
         // The kit level acts as (level/127) squared, and pan is per drum key.
         var levelGain = DrumKitTable.LevelGain(key.Level);
         var (gainLeft, gainRight) = _pan.Gains(key.Pan);
 
-        for (var i = 0; i < sampleCount; i++)
-        {
-            mono[i] = (float)(mono[i] * levelGain);
-            left[i] = (float)(mono[i] * gainLeft);
-            right[i] = (float)(mono[i] * gainRight);
-        }
+        // Pan reads the levelled mono back after it has been narrowed to float, as the scalar loop
+        // did -- the kit level is not a second factor folded into the pan gain.
+        Simd.Scale(mono, levelGain);
+        Simd.StoreScaled(mono, gainLeft, left);
+        Simd.StoreScaled(mono, gainRight, right);
 
         ApplyVolume(left, right, mono, volumeCurve);
         return new RenderedNote(left, right, mono, resolved.Name);
@@ -313,6 +306,10 @@ public sealed class NoteRenderer
 
             var baseRatio = Math.Pow(2.0, (60 - nativeSemitones) / 12.0) * coarse;
 
+            // Both contributions are control-rate -- see the memo note in the melodic branch below.
+            var lastModulation = double.NaN;
+            var lastRatio = 0.0;
+
             for (var i = 0; i < sampleCount; i++)
             {
                 var modulation = 0.0;
@@ -326,7 +323,13 @@ public sealed class NoteRenderer
                     modulation += pitchLfo[i];
                 }
 
-                ratios[i] = baseRatio * Math.Pow(2.0, modulation / 12000.0);
+                if (modulation != lastModulation)
+                {
+                    lastRatio = baseRatio * Math.Pow(2.0, modulation / 12000.0);
+                    lastModulation = modulation;
+                }
+
+                ratios[i] = lastRatio;
             }
         }
         else
@@ -335,6 +338,14 @@ public sealed class NoteRenderer
             // then taken as a ratio against the sample's own root.
             var basePitch = (double)_pitch.BasePitchMilliSemitones(partial, note, partial.KeyCenter);
             var nativePitch = (descriptor.RootKey * 1000.0) + 1024.0 - descriptor.FineTune;
+
+            // Memoised on the exact input, the same way BuildVolumeCurve memoises PartVolumeScale.
+            // Both modulation terms come from Expand, so they hold one value across each 320-sample
+            // control block; only bend moves per sample, and it is null on a note that never bends.
+            // A note without bend therefore takes one Math.Pow per control block rather than 320.
+            // Reusing the result only when the input is bit-identical keeps this exact.
+            var lastPitch = double.NaN;
+            var lastRatio = 0.0;
 
             for (var i = 0; i < sampleCount; i++)
             {
@@ -354,7 +365,13 @@ public sealed class NoteRenderer
                     pitch += pitchAddCurve[Math.Min(i, pitchAddCurve.Length - 1)];
                 }
 
-                ratios[i] = Math.Pow(2.0, (PitchChain.Clamp(pitch) - nativePitch) / 12000.0);
+                if (pitch != lastPitch)
+                {
+                    lastRatio = Math.Pow(2.0, (PitchChain.Clamp(pitch) - nativePitch) / 12000.0);
+                    lastPitch = pitch;
+                }
+
+                ratios[i] = lastRatio;
             }
         }
 
@@ -404,13 +421,26 @@ public sealed class NoteRenderer
             return;
         }
 
-        for (var i = 0; i < left.Length; i++)
+        // The send is post-fader: the wet scales with volume too.
+        //
+        // Split at the curve's end rather than clamping the index per sample. The curve is built
+        // per note and can be shorter than the buffer, in which case the scalar loop held its last
+        // value across the remainder -- so the tail is one constant gain, and only the covered
+        // prefix needs a moving one.
+        var moving = Math.Min(left.Length, volumeCurve.Length);
+
+        ApplyChannel(left, volumeCurve, moving);
+        ApplyChannel(right, volumeCurve, moving);
+        ApplyChannel(mono, volumeCurve, moving);
+    }
+
+    private static void ApplyChannel(float[] channel, double[] volumeCurve, int moving)
+    {
+        Simd.ScaleVarying(channel.AsSpan(0, moving), volumeCurve);
+
+        if (moving < channel.Length)
         {
-            // The send is post-fader: the wet scales with volume too.
-            var gain = volumeCurve[Math.Min(i, volumeCurve.Length - 1)];
-            left[i] = (float)(left[i] * gain);
-            right[i] = (float)(right[i] * gain);
-            mono[i] = (float)(mono[i] * gain);
+            Simd.Scale(channel.AsSpan(moving), volumeCurve[^1]);
         }
     }
 
@@ -418,28 +448,25 @@ public sealed class NoteRenderer
     /// <param name="ticks">One value per control tick.</param>
     /// <param name="sampleCount">How many samples to fill.</param>
     /// <returns>The expanded array.</returns>
+    /// <remarks>
+    /// Walked a control block at a time rather than a sample at a time. Per sample it costs an
+    /// integer division to recover a tick index that only advances every <see cref="ControlBlock"/>
+    /// samples; filling each block in one go leaves the same values and lets the runtime's vectorised
+    /// <see cref="Span{T}.Fill"/> do the writing.
+    /// </remarks>
     public static double[] Expand(double[] ticks, int sampleCount)
     {
+        ArgumentNullException.ThrowIfNull(ticks);
+
         var result = new double[sampleCount];
-        for (var i = 0; i < sampleCount; i++)
+        for (var start = 0; start < sampleCount; start += ControlBlock)
         {
-            var tick = Math.Min(i / ControlBlock, ticks.Length - 1);
-            result[i] = ticks[tick];
+            var length = Math.Min(ControlBlock, sampleCount - start);
+            result.AsSpan(start, length).Fill(ticks[Math.Min(start / ControlBlock, ticks.Length - 1)]);
         }
 
         return result;
     }
 
-    private static bool AnyNonZero(double[] values)
-    {
-        foreach (var value in values)
-        {
-            if (value != 0.0)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    private static bool AnyNonZero(double[] values) => Simd.AnyNonZero(values);
 }

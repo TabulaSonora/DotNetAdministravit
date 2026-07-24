@@ -217,11 +217,8 @@ public sealed class SequenceRenderer
 
             var count = Math.Min(voice.Left.Length, total - (int)note.On);
 
-            for (var i = 0; i < count; i++)
-            {
-                left[note.On + i] += voice.Left[i];
-                right[note.On + i] += voice.Right[i];
-            }
+            Simd.Add(voice.Left.AsSpan(0, count), left.AsSpan((int)note.On, count));
+            Simd.Add(voice.Right.AsSpan(0, count), right.AsSpan((int)note.On, count));
 
             AccumulateSend(reverbSend, voice.Mono, note.On, count, note.ReverbSend, Reverb.SendGain);
             AccumulateSend(chorusSend, voice.Mono, note.On, count, note.ChorusSend, Chorus.SendGain);
@@ -230,11 +227,9 @@ public sealed class SequenceRenderer
 
         MixEffects(sequence, options, left, right, reverbSend, chorusSend, delaySend);
 
-        var peak = 0f;
-        for (var i = 0; i < total; i++)
-        {
-            peak = Math.Max(peak, Math.Max(Math.Abs(left[i]), Math.Abs(right[i])));
-        }
+        // One peak across both channels: maximum is exact under any association, so folding the
+        // right channel into the left channel's result is the same number the interleaved scan gave.
+        var peak = Simd.PeakAbs(right, Simd.PeakAbs(left));
 
         return new RenderResult(left, right, rate, rendered, peak);
     }
@@ -276,11 +271,7 @@ public sealed class SequenceRenderer
             return;
         }
 
-        var gain = gainOf(level);
-        for (var i = 0; i < count; i++)
-        {
-            bus[position + i] += (float)(mono[i] * gain);
-        }
+        Simd.MixScaled(mono.AsSpan(0, count), gainOf(level), bus.AsSpan((int)position, count));
     }
 
     private void MixEffects(
@@ -292,22 +283,29 @@ public sealed class SequenceRenderer
         float[]? chorusSend,
         float[]? delaySend)
     {
+        // One scratch pair for all three effects. Each Process writes every element it is given, so
+        // there is nothing to clear between them, and at a render's full length these are the two
+        // largest buffers in the method -- allocating a fresh pair per effect was ~230 MB on a
+        // five-minute song, which matters most in the browser.
+        float[]? wetLeft = null;
+        float[]? wetRight = null;
+
         if (chorusSend is not null && HasSignal(chorusSend))
         {
             var type = options.ChorusType ?? Selected(sequence.ChorusType);
-            MixWet(Chorus.ForType(type), chorusSend, left, right);
+            MixWet(Chorus.ForType(type), chorusSend, left, right, ref wetLeft, ref wetRight);
         }
 
         if (delaySend is not null && HasSignal(delaySend))
         {
             var type = options.DelayType ?? Selected(sequence.DelayType) ?? 0;
-            MixWet(SystemDelay.ForType(type), delaySend, left, right);
+            MixWet(SystemDelay.ForType(type), delaySend, left, right, ref wetLeft, ref wetRight);
         }
 
         if (reverbSend is not null && HasSignal(reverbSend))
         {
             var type = options.ReverbType ?? Selected(sequence.ReverbType);
-            MixWet(Reverb.ForType(type), reverbSend, left, right);
+            MixWet(Reverb.ForType(type), reverbSend, left, right, ref wetLeft, ref wetRight);
         }
     }
 
@@ -317,31 +315,19 @@ public sealed class SequenceRenderer
         return value < 0 ? null : value;
     }
 
-    private static void MixWet(IEffect effect, float[] send, float[] left, float[] right)
+    private static void MixWet(
+        IEffect effect, float[] send, float[] left, float[] right,
+        ref float[]? wetLeft, ref float[]? wetRight)
     {
-        var wetLeft = new float[send.Length];
-        var wetRight = new float[send.Length];
+        wetLeft ??= new float[send.Length];
+        wetRight ??= new float[send.Length];
         effect.Process(send, wetLeft, wetRight);
 
-        for (var i = 0; i < send.Length; i++)
-        {
-            left[i] += wetLeft[i];
-            right[i] += wetRight[i];
-        }
+        Simd.Add(wetLeft, left);
+        Simd.Add(wetRight, right);
     }
 
-    private static bool HasSignal(float[] bus)
-    {
-        foreach (var sample in bus)
-        {
-            if (sample != 0f)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    private static bool HasSignal(float[] bus) => Simd.AnyNonZero(bus);
 
     private static double[] BuildVolumeCurve(Sequence sequence, NoteRecord note, int span)
     {

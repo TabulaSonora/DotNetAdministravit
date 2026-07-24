@@ -446,14 +446,29 @@ public sealed class ToneGenerator
         var toChorus = _chorus is not null && part.ChorusSend > 0 ? Chorus.SendGain(part.ChorusSend) : 0.0;
         var toDelay = _delay is not null && part.DelaySend > 0 ? SystemDelay.SendGain(part.DelaySend) : 0.0;
 
-        for (var i = 0; i < scratch.Length; i++)
+        // The voice gain stays a separate multiply from the pan and send levels; see the remarks on
+        // the two-gain overload for why it cannot be folded into them.
+        Simd.MixScaled(scratch, gain, panLeft, left);
+        Simd.MixScaled(scratch, gain, panRight, right);
+
+        // A send at zero is skipped rather than multiplied out, which drops three of the five passes
+        // over the block on a part with no sends -- the usual case for the delay. That is exact
+        // rather than merely harmless: the buses are cleared to +0 at the top of every block, and a
+        // sum that starts at +0 can never reach -0, so adding the ±0 the multiply would have
+        // produced is guaranteed to leave every element as it stands.
+        if (toReverb != 0.0)
         {
-            var value = scratch[i] * gain;
-            left[i] += (float)(value * panLeft);
-            right[i] += (float)(value * panRight);
-            reverbBus[i] += (float)(value * toReverb);
-            chorusBus[i] += (float)(value * toChorus);
-            delayBus[i] += (float)(value * toDelay);
+            Simd.MixScaled(scratch, gain, toReverb, reverbBus);
+        }
+
+        if (toChorus != 0.0)
+        {
+            Simd.MixScaled(scratch, gain, toChorus, chorusBus);
+        }
+
+        if (toDelay != 0.0)
+        {
+            Simd.MixScaled(scratch, gain, toDelay, delayBus);
         }
     }
 
@@ -491,11 +506,8 @@ public sealed class ToneGenerator
 
     private static void Add(Span<float> left, Span<float> right, ReadOnlySpan<float> wetLeft, ReadOnlySpan<float> wetRight)
     {
-        for (var i = 0; i < left.Length; i++)
-        {
-            left[i] += wetLeft[i];
-            right[i] += wetRight[i];
-        }
+        Simd.Add(wetLeft, left);
+        Simd.Add(wetRight, right);
     }
 
     /// <summary>
