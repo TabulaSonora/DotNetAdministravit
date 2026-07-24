@@ -137,6 +137,76 @@ public class RomImageTests
             "Expected the manifest's nominal bank B span to overrun the file.");
     }
 
+    [SkippableFact]
+    public void AMemoryImageReadsIdenticallyToAFileImage()
+    {
+        // The browser has no filesystem and hands the DLL over as bytes. Nothing downstream knows
+        // which kind of image it holds, so the two must be indistinguishable through every read the
+        // engine actually performs -- the tables it slices and the wave ROM it samples.
+        var path = TestData.RequireSccore();
+
+        using var file = RomImage.Open(path, RomVerification.Quick);
+        using var memory = RomImage.FromMemory(File.ReadAllBytes(path), RomVerification.Quick);
+
+        Assert.Equal(file.Length, memory.Length);
+        Assert.Equal(file.ReadPeTimestamp(), memory.ReadPeTimestamp());
+        Assert.Equal(file.ComputeSha256(), memory.ComputeSha256());
+
+        var compared = 0;
+        foreach (var entry in file.Manifest.CachedTables)
+        {
+            Assert.Equal<byte[]>(file.Read(entry), memory.Read(entry));
+            compared++;
+        }
+
+        Assert.Equal(file.Manifest.CachedTables.Count, compared);
+
+        // A slice from each bank, taken through the wave-ROM view rather than at a bare offset, so a
+        // regression in positional reads past the 2 GB-safe range would show up here too.
+        var waves = new WaveRom(file);
+        foreach (var bank in (int[])[0, 1])
+        {
+            var offset = waves.BankBase(bank) + (3L * WaveRom.RegionSize);
+            Assert.Equal<byte[]>(file.Read(offset, 4096), memory.Read(offset, 4096));
+        }
+    }
+
+    [SkippableFact]
+    public void AMemoryImageIsHeldToTheSameIdentityAsAFile()
+    {
+        var bytes = File.ReadAllBytes(TestData.RequireSccore());
+
+        // Truncated: the size check fires first, before anything is read.
+        var truncated = Assert.Throws<RomIdentityException>(
+            () => RomImage.FromMemory(bytes.AsMemory(0, 64 * 1024)));
+        Assert.Contains("27,347,456", truncated.Message, StringComparison.Ordinal);
+
+        // Right length, one byte flipped away from the PE header: only the hash can catch it.
+        var tampered = bytes.ToArray();
+        tampered[0x200000] ^= 0xFF;
+
+        var ex = Assert.Throws<RomIdentityException>(() => RomImage.FromMemory(tampered));
+        Assert.Contains("SHA-256", ex.Message, StringComparison.Ordinal);
+
+        using var quick = RomImage.FromMemory(tampered, RomVerification.Quick);
+        Assert.Equal(27_347_456L, quick.Length);
+    }
+
+    [SkippableFact]
+    public void AMemoryImageNamesItselfInItsErrors()
+    {
+        // There is no path to quote, so the caller's name has to carry the diagnostic instead --
+        // "sccore.dll (from IndexedDB)" is a far more useful thing to see than "<memory>".
+        var bytes = File.ReadAllBytes(TestData.RequireSccore());
+
+        using var named = RomImage.FromMemory(bytes, RomVerification.Quick, name: "cached copy");
+        Assert.Equal("cached copy", named.Path);
+
+        var ex = Assert.Throws<RomIdentityException>(
+            () => RomImage.FromMemory(bytes.AsMemory(0, 1024), name: "cached copy"));
+        Assert.Contains("cached copy", ex.Message, StringComparison.Ordinal);
+    }
+
     private static string ReadAscii(byte[] header, int offset)
     {
         var span = header.AsSpan(offset, 16);

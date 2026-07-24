@@ -40,24 +40,25 @@ public sealed class RomIdentityException : Exception
 /// what lets this library stay fully managed and portable.
 /// </para>
 /// <para>
-/// Reads go through <see cref="RandomAccess"/> rather than a memory map, so no 27 MB copy is ever
-/// resident and no unsafe code is required.
+/// A file image reads through <see cref="RandomAccess"/> rather than a memory map, so no 27 MB copy is
+/// ever resident and no unsafe code is required. A host without a filesystem supplies the bytes
+/// instead; see <see cref="FromMemory"/>.
 /// </para>
 /// </remarks>
 public sealed class RomImage : IDisposable
 {
-    private readonly SafeFileHandle _handle;
+    private readonly Source _source;
     private bool _disposed;
 
-    private RomImage(string path, SafeFileHandle handle, long length, TableManifest manifest)
+    private RomImage(string path, Source source, TableManifest manifest)
     {
         Path = path;
-        _handle = handle;
-        Length = length;
+        _source = source;
+        Length = source.Length;
         Manifest = manifest;
     }
 
-    /// <summary>Path the image was opened from.</summary>
+    /// <summary>Path, or descriptive name, the image was opened from.</summary>
     public string Path { get; }
 
     /// <summary>Length of the file in bytes.</summary>
@@ -89,20 +90,53 @@ public sealed class RomImage : IDisposable
         var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         try
         {
-            var length = RandomAccess.GetLength(handle);
-            var image = new RomImage(path, handle, length, manifest);
-            if (verification != RomVerification.None)
-            {
-                image.Verify(verification);
-            }
-
-            return image;
+            return Verified(new RomImage(path, new FileSource(handle), manifest), verification);
         }
         catch
         {
             handle.Dispose();
             throw;
         }
+    }
+
+    /// <summary>Wraps an <c>SCCore.dll</c> already held in memory, and verifies it.</summary>
+    /// <param name="image">The whole file's bytes.</param>
+    /// <param name="verification">How strictly to check the build identity.</param>
+    /// <param name="manifest">Offset map to use; defaults to the embedded one.</param>
+    /// <param name="name">Descriptive name reported by <see cref="Path"/> and in error messages.</param>
+    /// <returns>An open image.</returns>
+    /// <exception cref="RomIdentityException">The bytes are not the pinned build.</exception>
+    /// <remarks>
+    /// <para>
+    /// For a host with no filesystem to open the DLL from. The browser build is the reason this exists:
+    /// there the file is picked once, cached in IndexedDB, and handed to the engine as bytes, so there
+    /// is never a path to give <see cref="Open"/>.
+    /// </para>
+    /// <para>
+    /// Nothing is copied — the memory is read in place — so the caller must keep it alive and unchanged
+    /// for as long as the image is used, exactly as a file image needs its handle to stay open.
+    /// </para>
+    /// </remarks>
+    public static RomImage FromMemory(
+        ReadOnlyMemory<byte> image,
+        RomVerification verification = RomVerification.Full,
+        TableManifest? manifest = null,
+        string name = "<memory>")
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        manifest ??= TableManifest.Default;
+
+        return Verified(new RomImage(name, new MemorySource(image), manifest), verification);
+    }
+
+    private static RomImage Verified(RomImage image, RomVerification verification)
+    {
+        if (verification != RomVerification.None)
+        {
+            image.Verify(verification);
+        }
+
+        return image;
     }
 
     /// <summary>Reads <paramref name="length"/> bytes starting at <paramref name="fileOffset"/>.</summary>
@@ -128,7 +162,7 @@ public sealed class RomImage : IDisposable
         var total = 0;
         while (total < destination.Length)
         {
-            var read = RandomAccess.Read(_handle, destination[total..], fileOffset + total);
+            var read = _source.Read(destination[total..], fileOffset + total);
             if (read == 0)
             {
                 throw new EndOfStreamException(
@@ -174,9 +208,9 @@ public sealed class RomImage : IDisposable
     /// <summary>Computes the SHA-256 of the whole file as lower-case hex.</summary>
     /// <returns>The digest.</returns>
     /// <remarks>
-    /// Hashes through <see cref="RandomAccess"/> rather than a <see cref="FileStream"/> wrapper,
-    /// because a stream constructed over the handle takes ownership of it and would close the image
-    /// on dispose.
+    /// Hashes through the same block reads the rest of the class uses rather than a
+    /// <see cref="FileStream"/> wrapper, because a stream constructed over the handle takes ownership
+    /// of it and would close the image on dispose.
     /// </remarks>
     public string ComputeSha256()
     {
@@ -186,7 +220,8 @@ public sealed class RomImage : IDisposable
         var buffer = new byte[1 << 20];
         for (long offset = 0; offset < Length;)
         {
-            var read = RandomAccess.Read(_handle, buffer, offset);
+            var wanted = (int)Math.Min(buffer.Length, Length - offset);
+            var read = _source.Read(buffer.AsSpan(0, wanted), offset);
             if (read == 0)
             {
                 break;
@@ -206,8 +241,9 @@ public sealed class RomImage : IDisposable
         if (Length != expected.Size)
         {
             throw new RomIdentityException(
-                $"'{Path}' is {Length:N0} bytes; the pinned {expected.Product} build is " +
-                $"{expected.Size:N0} bytes. A different build moves every table offset.");
+                $"'{Path}' is {Length:N0} bytes; the pinned build — the one that ships with " +
+                $"{expected.Product} {expected.Version} — is {expected.Size:N0} bytes. " +
+                "A different build moves every table offset.");
         }
 
         var timestamp = ReadPeTimestamp();
@@ -237,7 +273,7 @@ public sealed class RomImage : IDisposable
         DateTimeOffset.FromUnixTimeSeconds(timestamp).UtcDateTime
             .ToString("yyyy-MM-dd HH:mm:ss 'UTC'", CultureInfo.InvariantCulture);
 
-    /// <summary>Closes the underlying file handle.</summary>
+    /// <summary>Releases the underlying source — a file handle, if there is one.</summary>
     public void Dispose()
     {
         if (_disposed)
@@ -246,6 +282,63 @@ public sealed class RomImage : IDisposable
         }
 
         _disposed = true;
-        _handle.Dispose();
+        _source.Dispose();
+    }
+
+    /// <summary>Where an image's bytes come from.</summary>
+    /// <remarks>
+    /// The only thing the rest of the class needs of a source is a length and a positional read, which
+    /// is exactly the shape both a file handle and a byte buffer offer.
+    /// </remarks>
+    private abstract class Source : IDisposable
+    {
+        /// <summary>Length of the whole image in bytes.</summary>
+        public abstract long Length { get; }
+
+        /// <summary>Reads at an absolute offset, returning how much was actually read.</summary>
+        /// <param name="destination">Buffer to fill.</param>
+        /// <param name="offset">Absolute offset within the image.</param>
+        /// <returns>Bytes read; zero at the end of the image.</returns>
+        public abstract int Read(Span<byte> destination, long offset);
+
+        /// <summary>Releases anything the source owns.</summary>
+        public virtual void Dispose()
+        {
+        }
+    }
+
+    private sealed class FileSource : Source
+    {
+        private readonly SafeFileHandle _handle;
+
+        public FileSource(SafeFileHandle handle)
+        {
+            _handle = handle;
+            Length = RandomAccess.GetLength(handle);
+        }
+
+        public override long Length { get; }
+
+        public override int Read(Span<byte> destination, long offset) =>
+            RandomAccess.Read(_handle, destination, offset);
+
+        public override void Dispose() => _handle.Dispose();
+    }
+
+    private sealed class MemorySource(ReadOnlyMemory<byte> image) : Source
+    {
+        public override long Length => image.Length;
+
+        public override int Read(Span<byte> destination, long offset)
+        {
+            if (offset >= image.Length)
+            {
+                return 0;
+            }
+
+            var available = Math.Min(destination.Length, (int)(image.Length - offset));
+            image.Span.Slice((int)offset, available).CopyTo(destination);
+            return available;
+        }
     }
 }
