@@ -115,7 +115,10 @@ static int Info(ReadOnlySpan<string> args)
     Console.WriteLine($"pe timestamp  {timestamp} " +
         $"({DateTimeOffset.FromUnixTimeSeconds(timestamp).UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC)");
     Console.WriteLine($"sha256        {sha256}");
-    Console.WriteLine($"              {(matches ? "matches the pinned build" : "DOES NOT MATCH the pinned build")}");
+    // The DLL carries no version resource, so the hash is what says which release this is.
+    Console.WriteLine($"              {(matches
+        ? $"matches the pinned build ({dll.Product} {dll.Version})"
+        : "DOES NOT MATCH the pinned build")}");
     Console.WriteLine();
     Console.WriteLine(
         $"{rom.Manifest.CachedTables.Count} static tables, {rom.Manifest.LiveRegions.Count} live regions");
@@ -196,7 +199,7 @@ static int Render(ReadOnlySpan<string> args)
         ? RenderStreaming(rom, midiPath, options)
         : TabulaSonora.SequenceRenderer.Create(rom).RenderFile(midiPath, options);
 
-    WriteWav(outputPath, result.Left, result.Right, result.SampleRate);
+    TabulaSonora.WavWriter.Write(outputPath, result.Left, result.Right, result.SampleRate);
 
     var seconds = result.Left.Length / (double)result.SampleRate;
     var routing = options.Channels is { IsDefault: false } mask
@@ -336,36 +339,6 @@ static TabulaSonora.RenderResult RenderStreaming(
     return TabulaSonora.Realtime.SequencePlayer
         .FromFile(generator, midiPath)
         .RenderToEnd(options.TailSeconds, options.EndSeconds);
-}
-
-static void WriteWav(string path, float[] left, float[] right, int sampleRate)
-{
-    // Fixed full-scale gain, no per-file normalisation, so absolute level stays comparable.
-    using var stream = File.Create(path);
-    using var writer = new BinaryWriter(stream);
-
-    var frames = left.Length;
-    var dataBytes = frames * 4;
-
-    writer.Write("RIFF"u8);
-    writer.Write(36 + dataBytes);
-    writer.Write("WAVE"u8);
-    writer.Write("fmt "u8);
-    writer.Write(16);
-    writer.Write((short)1);
-    writer.Write((short)2);
-    writer.Write(sampleRate);
-    writer.Write(sampleRate * 4);
-    writer.Write((short)4);
-    writer.Write((short)16);
-    writer.Write("data"u8);
-    writer.Write(dataBytes);
-
-    for (var i = 0; i < frames; i++)
-    {
-        writer.Write((short)Math.Clamp(left[i] * 32767.0, -32768.0, 32767.0));
-        writer.Write((short)Math.Clamp(right[i] * 32767.0, -32768.0, 32767.0));
-    }
 }
 
 static int DumpEffect(ReadOnlySpan<string> args)
