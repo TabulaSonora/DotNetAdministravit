@@ -47,3 +47,7 @@ __pycache__/
 # Generated documentation (build with: dotnet docfx docs/docfx.json)
 docs/_site/
 docs/api/
+
+# Netlify CLI scratch state. The deploy configuration that matters is netlify.toml at the root;
+# this directory is a per-machine copy plus link state and belongs to nobody else's checkout.
+.netlify/
