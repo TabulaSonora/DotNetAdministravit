@@ -2,13 +2,14 @@
   "_note": "Every static table SC-VA needs lives inside SCCore.dll. The tables/*.bin files are byte-for-byte slices of the DLL, fully derivable from the offsets below -- the repo ships them only so it need not redistribute the copyrighted DLL. Verify the DLL identity first.",
   "dll": {
     "filename": "SCCore.dll",
-    "product": "Roland VS Sound Canvas VA (version-specific)",
+    "product": "Roland VS SOUND Canvas VA",
+    "version": "1.1.6",
     "size": 27347456,
     "sha256": "117e6aa147a96fbde5e10d2caf16c89965acc1e44235fd245992216cc620bdb1",
     "sha1": "cf9dce5a0cabee06792e884673b8beef806f1aed",
     "md5": "dbd9a30c168efef577d40a28d9adf37d",
     "pe_timestamp": 1572416468,
-    "note": "version resource is empty; identify by hash + PE timestamp + size"
+    "note": "version resource is empty; identify by hash + PE timestamp + size. 'version' is the SOUND Canvas VA release this build ships in, recorded from the installer -- it cannot be read from the file and is not verified."
   },
   "image_base": "0x180000000",
   "va_to_file_offset": {

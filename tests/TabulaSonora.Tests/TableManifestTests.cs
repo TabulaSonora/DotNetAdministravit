@@ -29,6 +29,16 @@ public class TableManifestTests
     }
 
     [Fact]
+    public void RecordsWhichSoundCanvasVaReleaseTheBuildComesFrom()
+    {
+        // Provenance, not evidence: the DLL has no version resource, so nothing reads this out of the
+        // file and nothing verifies it. It is here because "the 1.1.6 installer" is how a person
+        // finds the right file, while the hash above is how the code recognises it.
+        Assert.Equal("1.1.6", Manifest.Dll.Version);
+        Assert.Equal("Roland VS SOUND Canvas VA", Manifest.Dll.Product);
+    }
+
+    [Fact]
     public void DescribesFortyEightCachedTables()
     {
         Assert.Equal(48, Manifest.CachedTables.Count);

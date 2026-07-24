@@ -10,14 +10,24 @@ namespace TabulaSonora.Rom;
 /// </summary>
 /// <param name="FileName">Expected file name, for diagnostics only.</param>
 /// <param name="Product">Human-readable product description.</param>
+/// <param name="Version">
+/// The SOUND Canvas VA release this build ships in — <c>1.1.6</c>.
+/// </param>
 /// <param name="Size">Exact file size in bytes.</param>
 /// <param name="Sha256">Lower-case hex SHA-256 of the whole file.</param>
 /// <param name="Sha1">Lower-case hex SHA-1 of the whole file.</param>
 /// <param name="Md5">Lower-case hex MD5 of the whole file.</param>
 /// <param name="PeTimestamp">COFF <c>TimeDateStamp</c> from the PE header.</param>
+/// <remarks>
+/// <see cref="Version"/> is provenance, not evidence, and nothing verifies it: the DLL carries no
+/// version resource at all, which is why identity rests on the hash, the PE timestamp and the size.
+/// It is recorded because "the build that ships with SOUND Canvas VA 1.1.6" is how a person finds the
+/// right file, whereas a SHA-256 is how the code recognises it once they have.
+/// </remarks>
 public sealed record DllIdentity(
     string FileName,
     string Product,
+    string Version,
     long Size,
     string Sha256,
     string Sha1,
@@ -157,6 +167,7 @@ public sealed class TableManifest
         var dll = new DllIdentity(
             FileName: dllElement.GetProperty("filename").GetString() ?? "SCCore.dll",
             Product: dllElement.GetProperty("product").GetString() ?? string.Empty,
+            Version: GetStringOrNull(dllElement, "version") ?? string.Empty,
             Size: dllElement.GetProperty("size").GetInt64(),
             Sha256: RequireHex(dllElement, "sha256"),
             Sha1: RequireHex(dllElement, "sha1"),
