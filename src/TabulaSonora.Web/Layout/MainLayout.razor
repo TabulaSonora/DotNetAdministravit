@@ -60,6 +60,23 @@
         <a href="https://github.com/TabulaSonora/DotNetAdministravit/blob/main/LICENSE" target="_blank" rel="noopener">BSD 3-Clause</a>
         &middot;
         <a href="https://github.com/TabulaSonora/DotNetAdministravit/blob/main/NOTICE.md" target="_blank" rel="noopener">Third-party rights</a>
+
+        @* Which build this is. The site is published by hand from a working tree, so without this
+           there is no way to tell from the page whether what is live is what was last pushed. *@
+        @if (BuildInfo.Commit != "unknown")
+        {
+            <text>&middot;</text>
+            <a class="technical" target="_blank" rel="noopener"
+               href="@($"https://github.com/TabulaSonora/DotNetAdministravit/commit/{BuildInfo.Commit}")">
+                @BuildInfo.Commit[..8]
+            </a>
+
+            @* Built from a tree with tracked changes in it, so the hash above does not describe it. *@
+            @if (BuildInfo.Dirty)
+            {
+                <span class="tag tag-warn">modified</span>
+            }
+        }
     </p>
 </footer>
 

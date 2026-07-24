@@ -11,7 +11,13 @@ dotnet publish -c Release src/TabulaSonora.Web
 ```
 
 Then serve `bin/Release/net10.0/publish/wwwroot` as static files. There is almost nothing to
-configure — see *Two pages, one engine* below for the single thing there is. The delete matters:
+configure — see *Two pages, one engine* below for the single thing there is.
+
+The footer says which commit the build came from, linked to it on GitHub, with a **modified** chip if
+the tree had tracked changes when it was built. The site is published by hand, so that is the only way
+to tell from the page whether what is live is what was last pushed. It is stamped in by the
+`EmbedBuildInfo` target as compile-time constants rather than assembly attributes read by reflection,
+which is what makes it survive trimming and AOT. The delete matters:
 `dotnet publish` writes new content-hashed assets without removing the old ones, so republishing over
 the same directory leaves every previous generation sitting in `wwwroot` to be served alongside the
 current one.
