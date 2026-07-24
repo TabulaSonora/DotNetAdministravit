@@ -12,11 +12,13 @@
     <div class="row">
         <label>
             Vintage
+            @* Enumerated rather than listed, so the four names live in one place and a fifth map
+               would appear here by adding it to the enum. *@
             <select value="@((int)Session.Map)" @onchange="MapChanged">
-                <option value="1">SC-55</option>
-                <option value="2">SC-88</option>
-                <option value="3">SC-88Pro</option>
-                <option value="4">SC-8820</option>
+                @foreach (var map in Enum.GetValues<ToneMap>())
+                {
+                    <option value="@((int)map)">@ToneCatalog.VintageName(map)</option>
+                }
             </select>
         </label>
 

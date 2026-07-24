@@ -1,0 +1,129 @@
+@implements IDisposable
+@inject SynthSession Session
+@inject ToneCatalog Catalog
+@inject PlaybackPump Pump
+
+@*
+    The drum maps: every kit the program map reaches, and for each of them which key plays what.
+
+    Kits are labelled by the programs that select them, and keys by the tone they sound, because that
+    is all the ROM holds. The DLL carries no kit-name or drum-key-name table at all -- those live in
+    the plugin's companion tone files -- so a list saying "Room" or "Power" here would be a name this
+    application invented, not one it read.
+*@
+
+<section class="panel enter-rise">
+    <h2>Drum kits</h2>
+
+    @if (Catalog.DrumsFor(Session.DrumMapRow) is not { } catalogue)
+    {
+        <p class="note">No ROM loaded.</p>
+    }
+    else
+    {
+        <div class="row">
+            <label>
+                Map
+                <select value="@Session.DrumMapRow" @onchange="RowChanged">
+                    @for (var row = 0; row < SoundCatalog.DrumMapRows; row++)
+                    {
+                        var index = row;
+                        <option value="@index">@(index == 0 ? "A — GM/GS" : "B")</option>
+                    }
+                </select>
+            </label>
+
+            <span class="tag tag-muted">@catalogue.Kits.Count kits</span>
+
+            <span class="note">
+                Unlike an instrument, a kit does not resolve through the vintage's tone map: a program
+                change on the drum part goes through its own pair of lookups, and the same two maps are
+                there whichever module is selected. The module picks between them from the part's
+                internal bank code, which is not yet decoded here, so it is chosen directly.
+            </span>
+        </div>
+
+        <div class="kits">
+            @foreach (var kit in catalogue.Kits)
+            {
+                var index = kit.Kit;
+                <button class="kit @(index == Session.DrumKit ? "on" : "")" @onclick="() => SelectAsync(kit)">
+                    <span class="technical">PC @string.Join(", ", kit.Programs.Take(4).Select(p => p + 1))@(kit.Programs.Count > 4 ? "…" : "")</span>
+                    <span class="count">@kit.Keys.Count keys</span>
+                </button>
+            }
+        </div>
+
+        @if (catalogue.Kits.FirstOrDefault(k => k.Kit == Session.DrumKit) is { } showing)
+        {
+            <div class="pads">
+                @foreach (var key in showing.Keys)
+                {
+                    var note = key.Note;
+                    <button class="pad" title="@Explain(key)" @onclick="() => StrikeAsync(note)">
+                        <span class="technical">@ToneCatalog.NoteName(note)</span>
+                        <span class="name">@key.Name</span>
+                    </button>
+                }
+            </div>
+
+            <p class="note">
+                Kit #@showing.Kit, @showing.Keys.Count keys. A pad strikes channel
+                @(SynthSession.DrumChannel + 1) at the velocity set above; drums ring out, so a pad has
+                nothing to release. Hover one for its level, coarse pitch, mute group and pan.
+            </p>
+        }
+    }
+</section>
+
+@code {
+    /// <summary>The velocity a pad strikes at.</summary>
+    [Parameter]
+    public int Velocity { get; set; } = 100;
+
+    // Which kit is showing is not this panel's state: it is the engine's, read from it rather than
+    // recomputed, because selecting one sends the program change that selects it and a song or a
+    // controller moves it the same way.
+    protected override void OnInitialized() => Session.Changed += Redraw;
+
+    private void Redraw() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Session.Changed -= Redraw;
+
+    private void RowChanged(ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var row))
+        {
+            return;
+        }
+
+        Session.DrumMapRow = row;
+
+        // The row only decides how the *next* program change resolves, so without re-sending the one
+        // in force the part would go on sounding the other map's kit while this panel showed the new
+        // map's list -- true of the engine, and a lie about what a key will do.
+        if (Session.Parts is { } parts)
+        {
+            Session.SendChannel(
+                0xC0 | SynthSession.DrumChannel, parts[SynthSession.DrumChannel].Program, 0);
+        }
+    }
+
+    // Selecting a kit is a program change, not a setting: the engine has no other way in, and an
+    // undefined program leaves the kit alone rather than silencing the part.
+    private async Task SelectAsync(DrumKitEntry kit)
+    {
+        Session.SendChannel(0xC0 | SynthSession.DrumChannel, kit.Programs[0], 0);
+        await Pump.ArmForKeysAsync();
+    }
+
+    private async Task StrikeAsync(int note)
+    {
+        await Pump.ArmForKeysAsync();
+        Session.SendChannel(0x90 | SynthSession.DrumChannel, note, Velocity);
+    }
+
+    private static string Explain(DrumKeyEntry key) =>
+        $"tone #{key.Tone} · level {key.Level} · pitch {key.Pitch} · " +
+        $"group {(key.Group == 0 ? "none" : key.Group.ToString())} · pan {key.Pan}";
+}

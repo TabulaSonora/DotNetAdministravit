@@ -1,15 +1,26 @@
+@implements IDisposable
 @inject SynthSession Session
+@inject PlaybackPump Pump
 
 @*
-    Channels are labelled the way a mixer labels them, 1-16, not the way MIDI numbers them. Channel 10
-    is the drum part, so it is marked.
+    Sixteen parts, live. Channels are labelled the way a mixer labels them, 1-16, not the way MIDI
+    numbers them; channel 10 is the drum part, so it is marked.
 
-    ChannelMask is the one thing the library documents as safe to change while sound is running, so
-    these take effect on the next block with no rebuild and no gap.
+    Two kinds of control, and the difference matters. Mute and solo go to ChannelMask, which sits at
+    the mix where no MIDI message reaches, so they take effect on the next block and nothing can undo
+    them. The faders send Control Changes -- the engine has no other way in, and tracking the value
+    behind its back would be a second source of truth for something the file also writes -- so a
+    running sequence overwrites them at its next controller event, exactly as it would on the module.
 *@
 
 <section class="panel enter-rise">
     <h2>Mixer</h2>
+
+    @* Counted once for the whole panel rather than once per strip: this redraws ten times a second,
+       and asking the pool sixteen times over would walk all 64 slots sixteen times to answer it. *@
+    @{
+        var voices = VoiceCounts();
+    }
 
     @* Purple is the system's selected state, and an engaged mute or solo is exactly that: neither
        the primary action nor a health signal. The letter is what tells the two apart. *@
@@ -17,8 +28,20 @@
         @for (var channel = 0; channel < ChannelMask.ChannelCount; channel++)
         {
             var index = channel;
-            <div class="strip @(Session.Channels.IsAudible(index) ? "" : "silent")">
-                <span class="label">@(index + 1)@(index == 9 ? " ⋅ drums" : "")</span>
+            var part = Session.Parts?[index];
+            var sounding = Sounding(index);
+
+            <div class="strip @(Session.Channels.IsAudible(index) ? "" : "silent") @(Idle(index) ? "unused" : "")">
+                <span class="label">
+                    @(index + 1)@(index == SynthSession.DrumChannel ? " ⋅ drums" : "")
+                    @if (voices[index] > 0)
+                    {
+                        <span class="voices technical">@voices[index]</span>
+                    }
+                </span>
+
+                <span class="sounding" title="@sounding">@sounding</span>
+
                 <span class="buttons">
                     <button class="btn btn-secondary btn-tiny"
                             aria-pressed="@(Session.Channels.IsMuted(index) ? "true" : "false")"
@@ -29,15 +52,161 @@
                             aria-label="@($"Solo channel {index + 1}")"
                             @onclick="() => Session.Channels.ToggleSoloed(index)">S</button>
                 </span>
+
+                @if (part is not null)
+                {
+                    <span class="faders">
+                        @foreach (var fader in Faders)
+                        {
+                            var controller = fader.Controller;
+                            <label class="fader" title="@($"{fader.Name} — CC{controller}")">
+                                <span class="technical">@fader.Short</span>
+                                <input type="range" min="0" max="127"
+                                       value="@Value(index, part, controller)"
+                                       aria-label="@($"{fader.Name} on channel {index + 1}")"
+                                       @onpointerdown="() => Grab(index, part, controller)"
+                                       @onpointerup="Release"
+                                       @onpointercancel="Release"
+                                       @onchange="Release"
+                                       @oninput="e => Move(index, controller, e)" />
+                            </label>
+                        }
+                    </span>
+                }
             </div>
         }
     </div>
 
     <div class="row">
         <button class="btn btn-secondary" @onclick="() => Session.Channels.Reset()">All on</button>
+        <button class="btn btn-secondary" @onclick="Restore">Faders to power-on</button>
         <span class="note">
             A silenced channel contributes nothing at all &mdash; not to the dry mix, and not to the
-            reverb, chorus or delay buses either, so muting a part also removes its tail.
+            reverb, chorus or delay buses either, so muting a part also removes its tail. The faders
+            send the controllers a file sends, so a running song overwrites them where it has its own;
+            mute and solo it cannot touch.
         </span>
     </div>
 </section>
+
+@code {
+    // Volume and pan are what a mixer is for; the two sends are here because on this module they are
+    // half of the sound -- a GM reset leaves every part's reverb send at 40, and a part pulled out of
+    // the reverb is a different instrument, not a quieter one.
+    private static readonly (int Controller, string Name, string Short)[] Faders =
+    [
+        (7, "Volume", "vol"),
+        (10, "Pan", "pan"),
+        (91, "Reverb send", "rev"),
+        (93, "Chorus send", "cho"),
+    ];
+
+    private Grip? _dragging;
+
+    private sealed record Grip(int Channel, int Controller, int Value);
+
+    protected override void OnInitialized()
+    {
+        // Ten times a second, which is what makes this a meter as well as a control: a song's own
+        // volume and pan moves show up here as it plays.
+        Pump.Tick += Redraw;
+        Session.Changed += Redraw;
+    }
+
+    private void Redraw() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Pump.Tick -= Redraw;
+        Session.Changed -= Redraw;
+    }
+
+    // The fader being dragged renders the value it last emitted rather than the part's. They are the
+    // same number in the ordinary case, but not while a song is writing that controller too -- and
+    // there, redrawing the file's value into the control under the finger would fight the drag.
+    // Keyboard users are unaffected: no pointer is down, so the part is what shows, which is right.
+    private int Value(int channel, Part part, int controller) =>
+        _dragging is { } grip && grip.Channel == channel && grip.Controller == controller
+            ? grip.Value
+            : Read(part, controller);
+
+    private void Grab(int channel, Part part, int controller) =>
+        _dragging = new Grip(channel, controller, Read(part, controller));
+
+    private void Release() => _dragging = null;
+
+    private static int Read(Part part, int controller) => controller switch
+    {
+        7 => part.Volume,
+        10 => part.Pan,
+        91 => part.ReverbSend,
+        _ => part.ChorusSend,
+    };
+
+    private void Move(int channel, int controller, ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var value))
+        {
+            return;
+        }
+
+        Session.SendControl(channel, controller, value);
+
+        if (_dragging is { } grip && grip.Channel == channel && grip.Controller == controller)
+        {
+            _dragging = grip with { Value = value };
+        }
+    }
+
+    // What a GM reset leaves behind, which is where these start and what "put them back" means. Not a
+    // Panic: this touches the four faders and nothing else, so a song keeps playing through it.
+    private void Restore()
+    {
+        for (var channel = 0; channel < ChannelMask.ChannelCount; channel++)
+        {
+            Session.SendControl(channel, 7, SequenceBuilder.DefaultVolume);
+            Session.SendControl(channel, 10, SequenceBuilder.DefaultPan);
+            Session.SendControl(channel, 91, SequenceBuilder.DefaultReverbSend);
+            Session.SendControl(channel, 93, SequenceBuilder.DefaultChorusSend);
+        }
+    }
+
+    private int[] VoiceCounts()
+    {
+        var counts = new int[ChannelMask.ChannelCount];
+        if (Session.Voices is not { } pool)
+        {
+            return counts;
+        }
+
+        foreach (var voice in pool.Active())
+        {
+            counts[voice.Channel]++;
+        }
+
+        return counts;
+    }
+
+    // A channel the loaded song never addresses. Only meaningful on the player: with no song, every
+    // channel is one the keyboard could be pointed at.
+    private bool Idle(int channel) => Session.Song is { } song && !song.Uses(channel);
+
+    private string Sounding(int channel)
+    {
+        if (Session.Parts is not { } parts || Session.Directory is not { } directory)
+        {
+            return string.Empty;
+        }
+
+        var part = parts[channel];
+        if (channel == SynthSession.DrumChannel)
+        {
+            return $"kit #{Session.DrumKit}";
+        }
+
+        var tone = directory.ProgramToTone(part.Program, Session.Map, part.Bank);
+        return tone >= 0 && directory.GetTone(tone) is { IsDefined: true } record
+            ? record.Name.Trim()
+            : "—";
+    }
+}

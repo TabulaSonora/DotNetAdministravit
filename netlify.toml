@@ -20,8 +20,6 @@
 # complete previous build of the engine. Publishing repeatedly over one directory measured 164 files
 # and 64.1 MB against 140 files and 24.9 MB from a clean one.
 #
-# One page, no routing (see App.razor), so no SPA catch-all redirect is needed.
-
 [build]
   publish = "src/TabulaSonora.Web/bin/Release/net10.0/publish/wwwroot"
 
@@ -29,3 +27,15 @@
   for = "/_framework/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
+
+# Two client-side routes (see App.razor), and only one file on disk. Without this a reload on /live --
+# or anyone following a link straight to it -- asks the host for a path that was never published and
+# answers 404; the router only ever sees URLs the browser has already been given. 200 rather than a
+# redirect, so the address bar keeps the route the user asked for.
+#
+# Netlify serves an existing file before it consults this, so the framework assets are unaffected; and
+# it applies the first matching redirect, so a catch-all belongs after any other rule, not before.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

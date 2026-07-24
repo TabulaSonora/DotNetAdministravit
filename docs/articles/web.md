@@ -10,10 +10,83 @@ rm -rf src/TabulaSonora.Web/bin/Release/net10.0/publish
 dotnet publish -c Release src/TabulaSonora.Web
 ```
 
-Then serve `bin/Release/net10.0/publish/wwwroot` as static files. There is no back end and nothing to
-configure. The delete matters: `dotnet publish` writes new content-hashed assets without removing the
-old ones, so republishing over the same directory leaves every previous generation sitting in
-`wwwroot` to be served alongside the current one.
+Then serve `bin/Release/net10.0/publish/wwwroot` as static files. There is almost nothing to
+configure — see *Two pages, one engine* below for the single thing there is. The delete matters:
+`dotnet publish` writes new content-hashed assets without removing the old ones, so republishing over
+the same directory leaves every previous generation sitting in `wwwroot` to be served alongside the
+current one.
+
+## Two pages, one engine
+
+The application is two routes, because it is two instruments:
+
+| | |
+|---|---|
+| `/` | the **player**: load a Standard MIDI File, drive the transport, mix it while it runs, render it to WAV |
+| `/live` | the **instrument**: a controller or the on-screen keyboard, every sound the ROM holds, and the drum maps |
+
+The split is not cosmetic. `PlaybackPump` already buffers the two cases in opposite directions — a second ahead for a song, 40 ms for live playing,
+because there the lead *is* the latency between a key and a sound — so the pages simply stop
+pretending those are one activity.
+
+Nothing about the engine is routed. Every service is a singleton owned by the layout, so navigating
+changes which panels are on screen and nothing else: the ROM stays loaded, a playing song keeps
+playing, a held note keeps sounding. The one thing that *would* have broken is disposal — a page is
+disposed on every navigation, so tearing the engine down in `Home.razor`'s `DisposeAsync` would have
+meant the first click of the nav silencing the instrument. It lives in `MainLayout` instead.
+
+**The one host requirement.** Two client-side routes and one file on disk: a reload on `/live`, or a
+link straight to it, asks the server for a path that was never published. Every static host needs a
+catch-all rewriting unknown paths to `index.html` with status **200** — `netlify.toml` carries one,
+and `python3 -m http.server` does not, so a local deep-link check needs a host that does.
+
+## The whole sound set
+
+The live page browses what the loaded ROM actually contains, per vintage:
+[`SoundCatalog`](xref:TabulaSonora.Patches.SoundCatalog) sweeps all 128 banks × 128 programs through
+[`PatchDirectory`](xref:TabulaSonora.Patches.PatchDirectory) — the same calls the engine makes on a
+program change, so there is no second lookup path to drift out of step — and reports each slot as one
+of four things:
+
+- **native**, defined by that bank, which a program change sounds;
+- **capital fallback**, empty in that bank, where the module sounds bank 0's tone rather than falling
+  silent (`Lut3Resolved`), so it is playable but is not the bank's own sound;
+- **indirect-only**, carrying the `0x8000` marker;
+- **unassigned**.
+
+The bank counts are the vintages themselves: 15 for the SC-55, 24 for the SC-88, 45 for the SC-88Pro,
+51 for the SC-8820. Not one indirect-only word is reachable from any of those four maps — the 1 164
+in the table sit in LUT3 rows only `Dereference` visits, through an alternate-articulation entry
+naming a map outside the selector. That is precisely why reading the word signed was a bug in the
+dereference and invisible in a browse.
+
+Drums do not work like this at all, and the page says so. A program change on the drum part does not
+go through the three-level melodic lookup; it goes through the drum table's own pair, whose two map
+rows are the same whichever vintage is selected. The module chooses between those rows from the
+part's *internal* bank code, which is not reversed here, so
+[`ToneGenerator.DrumMapRow`](xref:TabulaSonora.Realtime.ToneGenerator.DrumMapRow) is set by the host
+instead — without it the second map's kits cannot be sounded at all.
+
+Kits are labelled by the programs that select them and keys by the tone they sound, because that is
+all there is to read: the DLL carries no kit-name or drum-key-name table. Those names live in the
+plugin's companion `.tnf`/`.drk` tone files, which this project does not read, and a list saying
+"Room" or "Power" here would be a name the application invented rather than one it found.
+
+## Mixing while it plays
+
+The mixer is sixteen live channel strips, and the two kinds of control on them behave differently on
+purpose:
+
+- **Mute and solo** go to [`ChannelMask`](xref:TabulaSonora.ChannelMask), which sits at the mix where
+  no MIDI message reaches. They take effect on the next block, and nothing a file does can undo them.
+- **The faders send Control Changes** — volume, pan, and the reverb and chorus sends. The engine has
+  no other way in, and tracking the value behind its back would make a second source of truth for
+  something the file also writes. So a running sequence overwrites a fader at its next controller
+  event for that channel, exactly as it would on the module's own front panel.
+
+A fader being dragged renders the value it last emitted rather than the part's. They are the same
+number in the ordinary case, but not while a song is writing that controller too — and there,
+redrawing the file's value into the control under the finger fights the drag.
 
 ## Fully client-side, in the strong sense
 
@@ -137,7 +210,7 @@ Two details that are load-bearing rather than incidental:
   serialising it to JSON, so pushing blocks the obvious way turns every sample into decimal text and
   parses it back — enough on its own to starve the device. Byte arrays have their own bulk transport.
 - **The lead is not one number.** A song runs a second ahead, because the only cost of a generous
-  lead is a slower response to a seek and a seek flushes the queue anyway. Live playing runs 64 ms
+  lead is a slower response to a seek and a seek flushes the queue anyway. Live playing runs 40 ms
   ahead, because there the lead *is* the latency between pressing a key and hearing it.
 
 The position shown is the audible one — the renderer's position less whatever is still queued.

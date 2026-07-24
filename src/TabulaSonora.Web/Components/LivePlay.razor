@@ -4,6 +4,9 @@
 @inject PlaybackPump Pump
 
 @*
+    The keyboard and what plays into it. Which sound it plays is the instrument picker's business, and
+    the channel chosen here is what that picker sends its program changes to.
+
     Live playing needs the pump running even with no song loaded: with no sequence to drive, the
     session renders straight from the generator, which is what these notes sound into.
 *@
@@ -35,8 +38,10 @@
             <span class="tag tag-muted">@Midi.Devices.Count device(s)</span>
         }
 
-        <button class="btn btn-secondary" @onclick="ArmAsync"
-                disabled="@(Pump.State == TransportState.Playing && Pump.Mode == PlaybackMode.Live)">
+        @* This page's one primary action, and only while it is worth pressing: nothing is audible
+           until a context exists, and a browser will only start one inside a gesture. Once the device
+           is running it has nothing left to do and steps back to secondary. *@
+        <button class="btn @(Armed ? "btn-secondary" : "btn-primary")" @onclick="ArmAsync" disabled="@Armed">
             Start audio
         </button>
 
@@ -52,69 +57,84 @@
     <div class="row">
         <label>
             Channel
-            <select value="@_channel" @onchange="ChannelChanged">
-                @for (var c = 0; c < 16; c++)
+            <select value="@Channel" @onchange="ChannelPicked">
+                @for (var c = 0; c < ChannelMask.ChannelCount; c++)
                 {
                     var index = c;
-                    <option value="@index">@(index + 1)@(index == 9 ? " (drums)" : "")</option>
-                }
-            </select>
-        </label>
-
-        <label>
-            Program
-            <select value="@_program" @onchange="ProgramChanged">
-                @foreach (var entry in Programs())
-                {
-                    <option value="@entry.Program">@(entry.Program + 1). @entry.Name</option>
+                    <option value="@index">@(index + 1)@(index == SynthSession.DrumChannel ? " (drums)" : "")</option>
                 }
             </select>
         </label>
 
         <label>
             Velocity
-            <input type="range" min="1" max="127" value="@_velocity"
-                   @onchange="e => _velocity = int.TryParse(e.Value?.ToString(), out var v) ? v : _velocity" />
-            <span class="technical">@_velocity</span>
+            <input type="range" min="1" max="127" value="@Velocity" @oninput="VelocityMoved" />
+            <span class="technical">@Velocity</span>
         </label>
+
+        <span class="note">@Sounding</span>
     </div>
 
-    <Keyboard Velocity="_velocity" NoteOn="NoteOn" NoteOff="NoteOff" />
+    <Keyboard Velocity="Velocity" NoteOn="NoteOn" NoteOff="NoteOff" />
 </section>
 
 @code {
-    private int _channel;
-    private int _program;
-    private int _velocity = 100;
+    /// <summary>The channel the keyboard plays on.</summary>
+    [Parameter]
+    public int Channel { get; set; }
+
+    /// <summary>Raised when the channel is changed here.</summary>
+    [Parameter]
+    public EventCallback<int> ChannelChanged { get; set; }
+
+    /// <summary>The velocity every key sends.</summary>
+    [Parameter]
+    public int Velocity { get; set; } = 100;
+
+    /// <summary>Raised when the velocity is changed here.</summary>
+    [Parameter]
+    public EventCallback<int> VelocityChanged { get; set; }
+
+    private bool Armed => Pump.State == TransportState.Playing;
+
+    // What the chosen channel is currently set to sound, named the way the picker names it. The drum
+    // part is not a program in the melodic sense at all, so it says so rather than showing an
+    // instrument name that would be a plain lie about what a key will do.
+    private string Sounding
+    {
+        get
+        {
+            if (Session.Parts is not { } parts || Session.Directory is not { } directory)
+            {
+                return string.Empty;
+            }
+
+            var part = parts[Channel];
+            if (Channel == SynthSession.DrumChannel)
+            {
+                return $"Drum part — program {part.Program + 1} selects the kit.";
+            }
+
+            var tone = directory.ProgramToTone(part.Program, Session.Map, part.Bank);
+            var name = tone >= 0 && directory.GetTone(tone) is { IsDefined: true } record
+                ? record.Name.Trim()
+                : "nothing";
+
+            return $"Bank {part.Bank}, program {part.Program + 1} — {name}.";
+        }
+    }
 
     protected override void OnInitialized()
     {
         Midi.Changed += Redraw;
 
-        // The program list is named from the patch directory for the selected vintage, so it has to
-        // be rebuilt when the engine is.
+        // A program change from the picker, from hardware or from a song changes what this panel says
+        // is sounding, and none of those are events this component handled.
         Session.Changed += Redraw;
+        Pump.Tick += Redraw;
     }
 
     private void Redraw() => InvokeAsync(StateHasChanged);
-
-    // Names come out of the patch directory for the vintage currently selected, so switching from
-    // SC-55 to SC-8820 relabels the list the way the module would.
-    private IEnumerable<(int Program, string Name)> Programs()
-    {
-        var directory = Session.Directory;
-        for (var program = 0; program < 128; program++)
-        {
-            if (directory is null)
-            {
-                yield return (program, $"program {program + 1}");
-                continue;
-            }
-
-            var tone = directory.GetTone(directory.ProgramToTone(program, Session.Map, bank: 0));
-            yield return (program, tone is { IsDefined: true } ? tone.Name.Trim() : "—");
-        }
-    }
 
     private async Task ConnectAsync()
     {
@@ -129,47 +149,30 @@
         await ArmAsync();
     }
 
-    // Nothing can be heard until a context exists and is running, and a browser will only start one
-    // inside a gesture -- so connecting an input or touching a key has to be what starts it.
-    //
-    // Arming live rather than playing: with a song loaded but stopped, this must not start the song,
-    // and it must buffer for latency rather than for safety.
-    private Task ArmAsync() =>
-        Pump.Mode == PlaybackMode.Song && Pump.State == TransportState.Playing
-            ? Task.CompletedTask
-            : Pump.ArmLiveAsync();
+    private Task ArmAsync() => Pump.ArmForKeysAsync();
 
-    private void ChannelChanged(ChangeEventArgs e)
-    {
-        if (int.TryParse(e.Value?.ToString(), out var channel))
-        {
-            _channel = channel;
-            SendProgram();
-        }
-    }
+    private Task ChannelPicked(ChangeEventArgs e) =>
+        int.TryParse(e.Value?.ToString(), out var channel)
+            ? ChannelChanged.InvokeAsync(channel)
+            : Task.CompletedTask;
 
-    private void ProgramChanged(ChangeEventArgs e)
-    {
-        if (int.TryParse(e.Value?.ToString(), out var program))
-        {
-            _program = program;
-            SendProgram();
-        }
-    }
-
-    private void SendProgram() => Session.SendChannel(0xC0 | _channel, _program, 0);
+    private Task VelocityMoved(ChangeEventArgs e) =>
+        int.TryParse(e.Value?.ToString(), out var velocity)
+            ? VelocityChanged.InvokeAsync(velocity)
+            : Task.CompletedTask;
 
     private async Task NoteOn(int note)
     {
         await ArmAsync();
-        Session.SendChannel(0x90 | _channel, note, _velocity);
+        Session.SendChannel(0x90 | Channel, note, Velocity);
     }
 
-    private void NoteOff(int note) => Session.SendChannel(0x80 | _channel, note, 0);
+    private void NoteOff(int note) => Session.SendChannel(0x80 | Channel, note, 0);
 
     public void Dispose()
     {
         Midi.Changed -= Redraw;
         Session.Changed -= Redraw;
+        Pump.Tick -= Redraw;
     }
 }

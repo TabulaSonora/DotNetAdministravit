@@ -1,0 +1,30 @@
+@page "/"
+@implements IDisposable
+@inject SynthSession Session
+
+<PageTitle>Tabula Sonora</PageTitle>
+
+@*
+    The file player. Everything here is about a sequence that already exists: load it, drive it, mix
+    it while it runs, render it out.
+
+    Play is this page's single primary action, so nothing else on it takes the orange.
+*@
+
+@if (Session.IsReady)
+{
+    <Transport />
+    <Mixer />
+    <EngineControls />
+    <Export />
+}
+
+@code {
+    // The page appears the moment a ROM finishes loading, which is an event another component
+    // handled; without this the panels stay hidden until something else redraws.
+    protected override void OnInitialized() => Session.Changed += Redraw;
+
+    private void Redraw() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Session.Changed -= Redraw;
+}

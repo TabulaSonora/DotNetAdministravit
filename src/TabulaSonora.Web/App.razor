@@ -1,4 +1,29 @@
-@using TabulaSonora.Web.Pages
+@using TabulaSonora.Web.Layout
 
-@* One page, no routing: this is a single instrument, not a site. *@
-<Home />
+@*
+    Two pages, because they are two instruments. Loading a file and driving a transport has nothing in
+    common with connecting a controller and playing, and the pump already treats them as opposite
+    cases -- a song buffers a full second ahead where live playing buffers 40 ms, because there the
+    buffer IS the latency between a key and a sound.
+
+    The engine itself is not routed. Every service is a singleton and the layout owns them, so
+    navigating between the two changes which panels are on screen and nothing else: the ROM stays
+    loaded, a playing song keeps playing, and a held note keeps sounding.
+*@
+<Router AppAssembly="@typeof(App).Assembly">
+    <Found Context="route">
+        <RouteView RouteData="@route" DefaultLayout="@typeof(MainLayout)" />
+    </Found>
+    <NotFound>
+        <LayoutView Layout="@typeof(MainLayout)">
+            <PageTitle>Tabula Sonora &mdash; no such page</PageTitle>
+            <section class="panel enter-rise">
+                <h2>No such page</h2>
+                <p>
+                    There are two: the <a href="">player</a>, for Standard MIDI Files, and
+                    <a href="live">live</a>, for playing one yourself.
+                </p>
+            </section>
+        </LayoutView>
+    </NotFound>
+</Router>

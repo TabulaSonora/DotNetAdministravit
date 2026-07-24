@@ -2,6 +2,7 @@ using TabulaSonora.Midi;
 using TabulaSonora.Patches;
 using TabulaSonora.Realtime;
 using TabulaSonora.Rom;
+using TabulaSonora.Voices;
 
 namespace TabulaSonora.Web.Services;
 
@@ -31,10 +32,22 @@ public sealed record EngineSettings(ToneMap Map, bool Reverb, bool Chorus, bool 
 /// <param name="Name">File name as the user picked it.</param>
 /// <param name="Events">Parsed events, ordered by position.</param>
 /// <param name="LengthSamples">Position of the last event of any kind.</param>
-public sealed record LoadedSong(string Name, IReadOnlyList<MidiEvent> Events, long LengthSamples)
+/// <param name="UsedChannels">
+/// Bit <c>n</c> is set when some channel voice message addresses channel <c>n</c>.
+/// </param>
+public sealed record LoadedSong(
+    string Name,
+    IReadOnlyList<MidiEvent> Events,
+    long LengthSamples,
+    int UsedChannels)
 {
     /// <summary>Duration up to the last event.</summary>
     public TimeSpan Duration => TimeSpan.FromSeconds(LengthSamples / (double)ToneGenerator.SampleRate);
+
+    /// <summary>Whether the song addresses a channel at all.</summary>
+    /// <param name="channel">MIDI channel, 0–15.</param>
+    /// <returns>Whether any channel voice message names it.</returns>
+    public bool Uses(int channel) => (UsedChannels & (1 << channel)) != 0;
 }
 
 /// <summary>
@@ -64,9 +77,17 @@ public sealed class SynthSession : IDisposable
     private SequencePlayer? _player;
 
     private EngineSettings _settings = EngineSettings.Default;
+    private int _drumMapRow;
 
     /// <summary>Per-channel mute and solo, shared with every generator this session builds.</summary>
     public ChannelMask Channels { get; } = new();
+
+    /// <summary>The channel routed to the drum path.</summary>
+    /// <remarks>
+    /// Read from the engine's own default rather than restated, because this page does not change it:
+    /// GM channel 10, which every part of the UI that distinguishes drums from instruments needs.
+    /// </remarks>
+    public static int DrumChannel { get; } = new ToneGeneratorOptions().DrumChannel;
 
     /// <summary>
     /// Raised when the loaded ROM or song changes.
@@ -98,6 +119,47 @@ public sealed class SynthSession : IDisposable
 
     /// <summary>The patch directory, for browsing programs by name.</summary>
     public PatchDirectory? Directory => _notes?.Directory;
+
+    /// <summary>The drum kit table, for browsing kits and their key maps.</summary>
+    public DrumKitTable? Drums => _notes?.Drums;
+
+    /// <summary>
+    /// The sixteen parts as the running engine holds them, or <see langword="null"/> before one exists.
+    /// </summary>
+    /// <remarks>
+    /// Read-only here by intent. The engine has no MIDI out and nothing else tracks channel state, so
+    /// this is the only way a panel can show what a song has done to a channel — but the way to
+    /// <em>change</em> one is still to send it a message, which is what the module would receive.
+    /// </remarks>
+    public IReadOnlyList<Part>? Parts => _engine?.Parts;
+
+    /// <summary>The voice allocator, for per-channel activity.</summary>
+    public VoicePool? Voices => _engine?.Voices;
+
+    /// <summary>The drum kit in force, or -1 with no engine.</summary>
+    public int DrumKit => _engine?.DrumKit ?? -1;
+
+    /// <summary>Which drum map row a program change on the drum part resolves against.</summary>
+    /// <remarks>
+    /// Held here as well as on the generator because a vintage or effect change builds a new one, and
+    /// a setting the user chose must not be lost to a rebuild it has nothing to do with. Not
+    /// remembered between visits: <see cref="EnginePreferences"/> stores exactly the four values a
+    /// rebuild depends on, and a fifth field would invalidate every preference already stored.
+    /// </remarks>
+    public int DrumMapRow
+    {
+        get => _drumMapRow;
+        set
+        {
+            _drumMapRow = value;
+            if (_engine is not null)
+            {
+                _engine.DrumMapRow = value;
+            }
+
+            Changed?.Invoke();
+        }
+    }
 
     /// <summary>All four engine settings at once.</summary>
     /// <remarks>
@@ -201,7 +263,19 @@ public sealed class SynthSession : IDisposable
         ArgumentNullException.ThrowIfNull(midi);
 
         var events = SmfReader.Parse(midi, ToneGenerator.SampleRate);
-        Song = new LoadedSong(name, events, events.Count > 0 ? events[^1].Position : 0);
+
+        // Which channels the file touches at all, so the mixer can dim the twelve strips a four-part
+        // sequence never addresses instead of showing sixteen identical dead ones.
+        var used = 0;
+        foreach (var message in events)
+        {
+            if (message.Kind == MidiEventKind.Channel)
+            {
+                used |= 1 << message.Channel;
+            }
+        }
+
+        Song = new LoadedSong(name, events, events.Count > 0 ? events[^1].Position : 0, used);
 
         _engine?.Reset();
         _player = _engine is null ? null : new SequencePlayer(_engine, events);
@@ -270,6 +344,19 @@ public sealed class SynthSession : IDisposable
     public void SendChannel(int status, int data1, int data2) =>
         _engine?.SendChannel(status, data1, data2);
 
+    /// <summary>Applies one Control Change — what the mixer's faders send.</summary>
+    /// <param name="channel">MIDI channel, 0–15.</param>
+    /// <param name="controller">Controller number.</param>
+    /// <param name="value">Controller value, 0–127.</param>
+    /// <remarks>
+    /// A fader really does send the controller rather than setting the part behind the engine's back,
+    /// so a running sequence overwrites it at its next controller event exactly as it would on the
+    /// module's own front panel. Mute and solo are the ones that survive, because
+    /// <see cref="ChannelMask"/> sits at the mix where no message reaches.
+    /// </remarks>
+    public void SendControl(int channel, int controller, int value) =>
+        _engine?.SendChannel(0xB0 | channel, controller, value);
+
     /// <summary>
     /// Renders the whole song to a WAV file, yielding between chunks so the page stays alive.
     /// </summary>
@@ -289,7 +376,9 @@ public sealed class SynthSession : IDisposable
             throw new InvalidOperationException("Load a DLL and a song before exporting.");
         }
 
-        var engine = new ToneGenerator(_notes, Options());
+        // The drum map row goes with it: an export that resolved kits through a different map than the
+        // one being listened to would be a different arrangement, not a rendering of this one.
+        var engine = new ToneGenerator(_notes, Options()) { DrumMapRow = _drumMapRow };
         var player = new SequencePlayer(engine, Song.Events);
 
         var total = (int)(Song.LengthSamples + (TailSeconds * ToneGenerator.SampleRate));
@@ -343,7 +432,7 @@ public sealed class SynthSession : IDisposable
 
         var position = _player?.Position ?? 0;
 
-        _engine = new ToneGenerator(_notes, Options());
+        _engine = new ToneGenerator(_notes, Options()) { DrumMapRow = _drumMapRow };
         _player = Song is null ? null : new SequencePlayer(_engine, Song.Events);
 
         // Put the new generator back where the old one was, so changing vintage mid-song resumes

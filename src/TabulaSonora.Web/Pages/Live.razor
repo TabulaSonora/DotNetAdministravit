@@ -1,0 +1,35 @@
+@page "/live"
+@implements IDisposable
+@inject SynthSession Session
+
+<PageTitle>Tabula Sonora &mdash; live</PageTitle>
+
+@*
+    The instrument. A controller or the on-screen keyboard goes in, and the whole sound set of the
+    loaded ROM is here to choose from rather than the 128 programs of bank 0.
+
+    The channel and the velocity are held here rather than in any one panel because three of them
+    share both: the keyboard plays on that channel at that velocity, the instrument picker sends its
+    program changes to it, and a drum pad strikes at it.
+*@
+
+@if (Session.IsReady)
+{
+    <LivePlay Channel="_channel" ChannelChanged="c => _channel = c"
+              Velocity="_velocity" VelocityChanged="v => _velocity = v" />
+    <InstrumentPicker Channel="_channel" />
+    <DrumKitBrowser Velocity="_velocity" />
+    <Mixer />
+    <EngineControls />
+}
+
+@code {
+    private int _channel;
+    private int _velocity = 100;
+
+    protected override void OnInitialized() => Session.Changed += Redraw;
+
+    private void Redraw() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Session.Changed -= Redraw;
+}

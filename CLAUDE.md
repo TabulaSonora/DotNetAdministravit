@@ -45,8 +45,10 @@ dotnet run -c Release --project src/TabulaSonora.Player -- "<path>/SCCore.dll" s
 ```
 
 `--map 1..4` picks the vintage (SC-55/88/88Pro/8820) and changes which tones and ROM regions resolve.
-`--stream` renders through the real-time block loop instead of note-by-note. `render-note` is the
-fastest way to A/B a single patch against the DLL.
+`--drum-map 0|1` picks the drum map row, which nothing in a MIDI file can reach — both renderers take
+it, and they must, or one file would render as two different arrangements. `--stream` renders through
+the real-time block loop instead of note-by-note. `render-note` is the fastest way to A/B a single
+patch against the DLL.
 
 The browser build. **Publish, do not `dotnet run`** — AOT happens at publish, and without it the
 engine runs at about 1× realtime and the audio starves; with it, tens of times realtime. The absolute
@@ -69,6 +71,25 @@ and 25 MB from a clean publish. `netlify.toml` carries the deploy steps.
 Fully client-side: no back end, no `HttpClient` registered, and the user's DLL is cached in IndexedDB
 and never leaves the machine. `docs/articles/web.md` covers the audio path and why blocks cross to
 JavaScript as `byte[]` rather than `float[]`. Deployed at <https://tabula-sonora.kddlb.cl>.
+
+Two routes: `/` is the SMF player and `/live` is the instrument. That needs a **catch-all rewriting
+unknown paths to `index.html` with status 200** or a reload on `/live` 404s; `netlify.toml` has one
+and `python3 -m http.server` does not. Nothing about the engine is routed — every service is a
+singleton the layout owns, so navigating keeps the ROM loaded and a playing song playing. Disposal
+therefore belongs in `MainLayout` and **not** in a page, which is disposed on every navigation.
+
+`Patches/SoundCatalog.cs` enumerates the whole sound set — all 128 banks × 128 programs per vintage,
+and the drum kits each of the two map rows reaches — through the same `PatchDirectory` calls the
+engine makes on a program change, so there is no second lookup path to drift. It classifies each slot
+as native, capital fallback, indirect-only or unassigned, and the counts are pinned in
+`SoundCatalogTests`. Kits have no names anywhere in the DLL, so they are labelled by the programs
+that select them and their keys by the melodic tone each sounds; inventing GS kit names here would be
+inventing data.
+
+`ToneGenerator.DrumMapRow` exists because the module picks the drum map from the part's *internal*
+bank code and that translation is not reversed — without a host-set row the second map's kits cannot
+be sounded at all. It is configuration, so `Reset()` leaves it alone, the same as the tone map; the
+kit it resolves to is MIDI state, so that does reset.
 
 The page is on the LoSnoCo design system. `wwwroot/css/losnoco.css` is a **verbatim** copy of that
 system's `colors_and_type.css` — do not edit it and do not re-declare its values; it is kept

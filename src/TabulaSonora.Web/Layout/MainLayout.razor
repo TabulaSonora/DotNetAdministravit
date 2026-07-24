@@ -1,8 +1,28 @@
+@inherits LayoutComponentBase
+@implements IAsyncDisposable
 @inject SynthSession Session
 @inject PlaybackPump Pump
-@implements IAsyncDisposable
 
-<PageTitle>Tabula Sonora</PageTitle>
+@*
+    Everything both pages share: the identity of the page, the nav between them, and the ROM gate.
+
+    The gate lives here rather than on each page for two reasons. It is the same gate -- neither page
+    can do anything without a DLL -- and putting it in the layout means the stored-DLL load in
+    RomLoader.OnInitializedAsync runs once for the session instead of once per navigation.
+*@
+
+@*
+    Above the header rather than inside it, and that is not a layout preference: a sticky element is
+    confined to its containing block, so a nav inside <header> would unstick and scroll away the
+    moment the title block left the screen.
+
+    NavLink sets aria-current on the match, which is what app.css styles, so there is no active-page
+    state to keep anywhere. Match.All on the player, or every URL would light it up.
+*@
+<nav class="nav">
+    <NavLink href="" Match="NavLinkMatch.All">Player</NavLink>
+    <NavLink href="live">Live</NavLink>
+</nav>
 
 <header>
     <div class="page-head">
@@ -12,23 +32,18 @@
         </div>
         <LSThemeToggle />
     </div>
+
     <p class="lede">
         A managed reimplementation of the Roland Sound Canvas VA synth voice, running entirely in this
         tab. Your <code>SCCore.dll</code> is read here, cached here, and never leaves the machine.
     </p>
 </header>
 
+@* The gate is here; what it gates is each page's own business. The layout must not hide the body on
+   it, or a mistyped URL would answer with an empty page instead of saying there is no such page. *@
 <main>
     <RomLoader />
-
-    @if (Session.IsReady)
-    {
-        <Transport />
-        <EngineControls />
-        <Mixer />
-        <Export />
-        <LivePlay />
-    }
+    @Body
 </main>
 
 <footer>
@@ -50,12 +65,14 @@
 
 @code {
     // Loading a song enables the export; loading a ROM brings up everything below the loader. Blazor
-    // re-renders only the component that handled the event, so the page redraws from the session
-    // instead, which cascades to every panel.
+    // re-renders only the component that handled the event, so the layout redraws from the session
+    // instead, which cascades to every panel on whichever page is showing.
     protected override void OnInitialized() => Session.Changed += Redraw;
 
     private void Redraw() => InvokeAsync(StateHasChanged);
 
+    // The layout, not a page. A page is disposed on every navigation, so tearing the engine down here
+    // would have meant the first click of the nav silencing the instrument.
     public ValueTask DisposeAsync()
     {
         Session.Changed -= Redraw;

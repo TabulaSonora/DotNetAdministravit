@@ -137,6 +137,21 @@ public sealed class PlaybackPump(SynthSession session, AudioOutput audio) : IDis
     /// </remarks>
     public Task ArmLiveAsync() => StartAsync(PlaybackMode.Live);
 
+    /// <summary>
+    /// Opens the device for live playing unless a song is already running.
+    /// </summary>
+    /// <returns>A task that completes when the device is ready to be played into.</returns>
+    /// <remarks>
+    /// What every control that can sound a note calls before sounding it — nothing is audible until a
+    /// context exists, and a browser only starts one inside a gesture. The exception is the point: a
+    /// running song must not be reduced to a 40 ms lead just because a key was pressed over it, so
+    /// while one plays, live notes ride its buffer and arrive late instead.
+    /// </remarks>
+    public Task ArmForKeysAsync() =>
+        Mode == PlaybackMode.Song && State == TransportState.Playing
+            ? Task.CompletedTask
+            : ArmLiveAsync();
+
     private async Task StartAsync(PlaybackMode mode)
     {
         if (!session.IsReady)

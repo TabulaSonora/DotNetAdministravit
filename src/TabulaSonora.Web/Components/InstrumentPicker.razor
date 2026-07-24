@@ -1,0 +1,172 @@
+@implements IDisposable
+@inject SynthSession Session
+@inject ToneCatalog Catalog
+@inject PlaybackPump Pump
+
+@*
+    Every melodic sound the loaded ROM holds for the selected vintage, not the 128 of bank 0.
+
+    A bank select picks a variation, and where a variation has no entry for a program the module
+    sounds bank 0's capital tone rather than falling silent. Both are shown, and told apart: a slot
+    that says "as bank 0" is real and playable, but it is not this bank's own sound, and a list that
+    hid the difference would claim every vintage has 128 programs in every bank.
+*@
+
+<section class="panel enter-rise">
+    <h2>Instruments</h2>
+
+    @if (Catalog.For(Session.Map) is not { } catalogue)
+    {
+        <p class="note">No ROM loaded.</p>
+    }
+    else if (Channel == SynthSession.DrumChannel)
+    {
+        <p class="note">
+            Channel @(SynthSession.DrumChannel + 1) is the drum part. Its program changes select a kit
+            rather than an instrument, and they resolve through the drum map below, not through this
+            table. Choose another channel to play an instrument.
+        </p>
+    }
+    else
+    {
+        <div class="row">
+            <span class="tag tag-muted">@ToneCatalog.VintageName(Session.Map)</span>
+            <span class="tag tag-muted">@catalogue.Banks.Count banks</span>
+            <span class="tag tag-muted">@catalogue.NativeCount.ToString("N0") programs</span>
+            <span class="tag tag-muted">@catalogue.ToneCount.ToString("N0") distinct tones</span>
+
+            <label>
+                Search
+                <input type="search" value="@_search" @oninput="Searched" placeholder="piano, strings, 88…" />
+            </label>
+        </div>
+
+        @if (_search.Length > 0)
+        {
+            var hits = Search(catalogue).ToList();
+
+            <p class="note">@hits.Count match@(hits.Count == 1 ? "" : "es")@(hits.Count == SearchLimit ? ", showing the first " + SearchLimit : "").</p>
+
+            <div class="hits">
+                @foreach (var hit in hits)
+                {
+                    <button class="hit @(Selected(hit.Bank, hit.Entry.Program) ? "on" : "")"
+                            @onclick="() => SelectAsync(hit.Bank, hit.Entry.Program)">
+                        <span class="technical">@hit.Bank ⋅ @(hit.Entry.Program + 1)</span>
+                        <span class="name">@hit.Entry.Name</span>
+                    </button>
+                }
+            </div>
+        }
+        else
+        {
+            @* Resolved rather than read from the field: switching vintage can take the selected bank
+               out of existence, and the catalogue's answer is the one the buttons must agree with. *@
+            var showing = Bank(catalogue);
+
+            <div class="banks">
+                @foreach (var bank in catalogue.Banks)
+                {
+                    var number = bank.Bank;
+                    <button class="bank @(number == showing.Bank ? "on" : "")" @onclick="() => _bank = number">
+                        <span class="technical">@number</span>
+                        <span class="count">@bank.NativeCount</span>
+                    </button>
+                }
+            </div>
+
+            <div class="programs">
+                @foreach (var entry in showing.Programs)
+                {
+                    var program = entry.Program;
+                    <button class="program @Kind(entry) @(Selected(showing.Bank, program) ? "on" : "")"
+                            disabled="@(!entry.Playable)"
+                            title="@Explain(entry)"
+                            @onclick="() => SelectAsync(showing.Bank, program)">
+                        <span class="technical">@(program + 1)</span>
+                        <span class="name">@entry.Name</span>
+                    </button>
+                }
+            </div>
+
+            <p class="note">
+                @showing.NativeCount of 128 programs are bank @showing.Bank's own; the rest sound bank
+                0's capital tone, which is what the module does with a variation it never filled in.
+            </p>
+        }
+    }
+</section>
+
+@code {
+    /// <summary>The channel a chosen sound is sent to.</summary>
+    [Parameter]
+    public int Channel { get; set; }
+
+    /// <summary>How many search hits are listed.</summary>
+    /// <remarks>
+    /// A vintage defines thousands of slots and a one-letter search matches most of them; a cap keeps
+    /// a keystroke from laying out a page of results nobody reads. The count above says when it bites.
+    /// </remarks>
+    public const int SearchLimit = 120;
+
+    private int _bank;
+    private string _search = string.Empty;
+
+    private readonly record struct Hit(int Bank, CatalogEntry Entry);
+
+    // The picker follows the engine rather than remembering its own idea of what is selected: a
+    // program change from hardware, from a song or from another panel moves the highlight too.
+    protected override void OnInitialized() => Session.Changed += Redraw;
+
+    private void Redraw() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Session.Changed -= Redraw;
+
+    private CatalogBank Bank(VintageCatalog catalogue) =>
+        catalogue.Banks.FirstOrDefault(b => b.Bank == _bank) ?? catalogue.Banks[0];
+
+    private bool Selected(int bank, int program) =>
+        Session.Parts is { } parts && parts[Channel].Bank == bank && parts[Channel].Program == program;
+
+    private void Searched(ChangeEventArgs e) => _search = e.Value?.ToString()?.Trim() ?? string.Empty;
+
+    // Number as well as name, because "88" is how a bank is looked for and a program is as often
+    // known by its number as by what it is called.
+    private IEnumerable<Hit> Search(VintageCatalog catalogue) =>
+        (from bank in catalogue.Banks
+         from entry in bank.Programs
+         where entry.Kind == CatalogEntryKind.Native &&
+             (entry.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+                 (entry.Program + 1).ToString() == _search ||
+                 bank.Bank.ToString() == _search)
+         select new Hit(bank.Bank, entry)).Take(SearchLimit);
+
+    private async Task SelectAsync(int bank, int program)
+    {
+        // Bank first, then program: a program change is what latches the pair, so the other order
+        // would sound the old bank's tone until the next note picked up the new one.
+        Session.SendControl(Channel, 0, bank);
+        Session.SendChannel(0xC0 | Channel, program, 0);
+
+        _bank = bank;
+        await Pump.ArmForKeysAsync();
+    }
+
+    private static string Kind(CatalogEntry entry) => entry.Kind switch
+    {
+        CatalogEntryKind.Native => "native",
+        CatalogEntryKind.CapitalFallback => "fallback",
+        CatalogEntryKind.IndirectOnly => "indirect",
+        _ => "empty",
+    };
+
+    private static string Explain(CatalogEntry entry) => entry.Kind switch
+    {
+        CatalogEntryKind.Native => $"tone #{entry.Tone}",
+        CatalogEntryKind.CapitalFallback => $"not defined in this bank; sounds bank 0's {entry.Name}",
+        CatalogEntryKind.IndirectOnly =>
+            "defined, but reachable only as an alternate articulation in mono mode — a program " +
+            "change to it sounds nothing",
+        _ => "nothing here",
+    };
+}

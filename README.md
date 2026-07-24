@@ -113,8 +113,11 @@ has to cover the scheduler's worst nap rather than its average one.
 ### In the browser
 
 **Running at [tabula-sonora.kddlb.cl](https://tabula-sonora.kddlb.cl).** The same engine, client-side,
-as a standalone Blazor WebAssembly application — file playback, WAV export, a 16-channel mixer, and
-live Web MIDI in. Bring your own `SCCore.dll`; the page caches it in IndexedDB on the first visit.
+as a standalone Blazor WebAssembly application, in two pages: a **player** for Standard MIDI Files
+with a WAV export and sixteen live channel strips, and a **live** page with Web MIDI in, an on-screen
+keyboard, and every sound the ROM holds — all 128 banks of each vintage, and both drum maps with each
+kit's key assignments. Bring your own `SCCore.dll`; the page caches it in IndexedDB on the first
+visit.
 
 To build it yourself:
 
@@ -125,7 +128,8 @@ dotnet publish -c Release src/TabulaSonora.Web
 
 Serve `bin/Release/net10.0/publish/wwwroot` as static files. There is no back end: the .NET runtime is
 compiled to WebAssembly, the DSP runs in the tab, and your `SCCore.dll` is read into IndexedDB and
-never leaves the machine.
+never leaves the machine. Two client-side routes and one file on disk, so the host needs a catch-all
+rewriting unknown paths to `index.html` with status 200 — otherwise a reload on `/live` 404s.
 
 **Publish it rather than `dotnet run` it.** AOT happens at publish, and it is not optional here: under
 the IL interpreter the engine measures about 1× realtime and the audio device starves, while the same

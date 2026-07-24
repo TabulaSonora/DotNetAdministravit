@@ -19,6 +19,7 @@ builder.Services.AddSingleton<AssetStore>();
 builder.Services.AddSingleton<EnginePreferences>();
 builder.Services.AddSingleton<AudioOutput>();
 builder.Services.AddSingleton<SynthSession>();
+builder.Services.AddSingleton<ToneCatalog>();
 builder.Services.AddSingleton<MidiInput>();
 builder.Services.AddSingleton<PlaybackPump>();
 
