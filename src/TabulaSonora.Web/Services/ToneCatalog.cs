@@ -110,6 +110,14 @@ public sealed class ToneCatalog(SynthSession session)
         _ => null,
     };
 
+    /// <summary>The banks that are a whole other module's sound set rather than a variation.</summary>
+    /// <remarks>
+    /// Listed beside the vintages rather than among a program's variants, because that is what they
+    /// are: a file selects one for the same reason it selects a vintage, and neither is a variation
+    /// of a Sound Canvas instrument.
+    /// </remarks>
+    public static readonly int[] EmulationBanks = [126, 127];
+
     /// <summary>The General MIDI family a program number falls in.</summary>
     /// <param name="program">Program number, 0–127.</param>
     /// <returns>The family's name.</returns>

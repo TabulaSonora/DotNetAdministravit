@@ -66,31 +66,48 @@
         }
         else
         {
-            var variants = Variants(catalogue, Program);
+            var instruments = Instruments(catalogue);
+            var variants = Emulation is null ? Variants(catalogue, Program) : [];
 
             <div class="miller">
                 <div class="column">
-                    <div class="column-head">Vintage</div>
+                    <div class="column-head">Sound map</div>
                     @foreach (var map in Enum.GetValues<ToneMap>())
                     {
                         var vintage = map;
-                        <button class="item @(vintage == Session.Map ? "on" : "")"
-                                @onclick="() => Session.Map = vintage">
+                        <button class="item @(Emulation is null && vintage == Session.Map ? "on" : "")"
+                                @onclick="() => ShowVintageAsync(vintage)">
                             <span class="name">@ToneCatalog.VintageName(vintage)</span>
                             <span class="technical">@(Catalog.For(vintage)?.Banks.Count ?? 0)</span>
+                        </button>
+                    }
+
+                    @* The CM-64 banks belong here rather than among the variants. They are not
+                       variations of a Sound Canvas instrument at all -- they are a different module's
+                       whole sound set, carried for compatibility, and a file selects one for the same
+                       reason it would select a vintage. Listing them as two more maps is what they
+                       are; a badge on bank 126 was filing them under the wrong thing. *@
+                    @foreach (var bank in ToneCatalog.EmulationBanks)
+                    {
+                        var emulation = bank;
+                        <button class="item @(Emulation == emulation ? "on" : "")"
+                                @onclick="() => ShowEmulationAsync(emulation)">
+                            <span class="name">@ToneCatalog.BankName(emulation)</span>
+                            <span class="technical">@(Catalog.For(Session.Map) is { } c ? Count(c, emulation) : 0)</span>
                         </button>
                     }
                 </div>
 
                 <div class="column">
                     <div class="column-head">Instrument</div>
-                    @foreach (var entry in catalogue.Banks[0].Programs)
+                    @foreach (var entry in instruments)
                     {
-                        @* The capital bank is the instrument list: it is the only bank every vintage
-                           fills completely, so it is the one that names all 128 without holes. *@
                         var program = entry.Program;
 
-                        if (program % ToneCatalog.FamilySize == 0)
+                        @* Families group the capital bank, whose programs are laid out the way
+                           General MIDI says. The CM-64 sets are not in that order and are not GM at
+                           all, so grouping them by it would be a caption over the wrong thing. *@
+                        if (Emulation is null && program % ToneCatalog.FamilySize == 0)
                         {
                             <div class="group">@ToneCatalog.FamilyOf(program)</div>
                         }
@@ -105,28 +122,47 @@
 
                 <div class="column">
                     <div class="column-head">Variant</div>
-                    @foreach (var variant in variants)
+                    @if (Emulation is { } fixedBank)
                     {
-                        var bank = variant.Bank;
-                        <button class="item @(Selected(bank, Program) ? "on" : "")"
-                                title="@ToneCatalog.BankName(bank)"
-                                @onclick="() => SelectAsync(bank, Program)">
-                            <span class="technical">@bank</span>
-                            <span class="name">@variant.Entry.Name</span>
-                            @if (ToneCatalog.BankName(bank) is { } label)
-                            {
-                                <span class="badge">@label</span>
-                            }
-                        </button>
+                        <p class="note column-note">
+                            A compatibility set has no variations: the bank is the map.
+                        </p>
+                    }
+                    else
+                    {
+                        @foreach (var variant in variants)
+                        {
+                            var bank = variant.Bank;
+                            <button class="item @(Selected(bank, Program) ? "on" : "")"
+                                    @onclick="() => SelectAsync(bank, Program)">
+                                <span class="technical">@bank</span>
+                                <span class="name">@variant.Entry.Name</span>
+                            </button>
+                        }
                     }
                 </div>
             </div>
 
             <p class="note">
-                @ToneCatalog.VintageName(Session.Map) defines
-                @(variants.Count == 1 ? "only the capital tone" : $"{variants.Count} variations") of program
-                @(Program + 1). Bank 0 is the capital; a bank not listed has no entry for this
-                program and would sound the capital anyway.
+                @if (Emulation is { } showing)
+                {
+                    <text>
+                        Bank @showing, the @ToneCatalog.BankName(showing) half of the Roland CM-64.
+                        127 is the LA side &mdash; the MT-32's own sound set, which is why the names
+                        read as they do &mdash; and 126 is the PCM side, the CM-32P's. Both are the
+                        same on every vintage, as a compatibility map belonging to no generation
+                        should be.
+                    </text>
+                }
+                else
+                {
+                    <text>
+                        @ToneCatalog.VintageName(Session.Map) defines
+                        @(variants.Count == 1 ? "only the capital tone" : $"{variants.Count} variations")
+                        of program @(Program + 1). Bank 0 is the capital; a bank not listed has no
+                        entry for this program and would sound the capital anyway.
+                    </text>
+                }
             </p>
         }
     }
@@ -156,6 +192,44 @@
     // rather than of program 1.
     private int Program =>
         _browsing ?? (Session.Parts is { } parts ? parts[Channel].Program : 0);
+
+    // Which compatibility set is being browsed, or null for an ordinary vintage. Read from the part
+    // rather than kept, so a file or a controller that selects bank 127 moves the first column too --
+    // the browser says what the channel IS, not what was last clicked in it.
+    private int? Emulation =>
+        Session.Parts is { } parts && ToneCatalog.BankName(parts[Channel].Bank) is not null
+            ? parts[Channel].Bank
+            : null;
+
+    private IReadOnlyList<CatalogEntry> Instruments(VintageCatalog catalogue) =>
+        Emulation is { } bank
+            ? [.. Bank(catalogue, bank).Programs.Where(e => e.Kind == CatalogEntryKind.Native)]
+            : catalogue.Banks[0].Programs;
+
+    private static CatalogBank Bank(VintageCatalog catalogue, int bank) =>
+        catalogue.Banks.FirstOrDefault(b => b.Bank == bank) ?? catalogue.Banks[0];
+
+    private static int Count(VintageCatalog catalogue, int bank) => Bank(catalogue, bank).NativeCount;
+
+    // Leaving a compatibility set means going back to an ordinary bank, which the part has no memory
+    // of; the capital is the only answer that is certainly there.
+    private Task ShowVintageAsync(ToneMap map)
+    {
+        Session.Map = map;
+        return Emulation is null ? Task.CompletedTask : SelectAsync(bank: 0, Program);
+    }
+
+    private Task ShowEmulationAsync(int bank)
+    {
+        // The first program of the set, because the one in force belongs to a different sound map and
+        // would land on whatever happens to sit at that number here.
+        var catalogue = Catalog.For(Session.Map);
+        var first = catalogue is null
+            ? 0
+            : Bank(catalogue, bank).Programs.FirstOrDefault(e => e.Kind == CatalogEntryKind.Native).Program;
+
+        return SelectAsync(bank, first);
+    }
 
     // The picker follows the engine rather than remembering its own idea of what is selected: a
     // program change from hardware, from a song or from another panel moves the highlight too.

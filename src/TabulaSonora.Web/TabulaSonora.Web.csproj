@@ -37,7 +37,7 @@
   <ItemGroup>
     <!--
       A browser cannot harvest these coefficients for itself: the engine computes them at start-up and
-      only a Windows x64 host can run it. This is the one piece of Roland-derived data the repository
+      only a Windows x64 host can run it. This is one of the two pieces of Roland-derived data the repository
       carries, and shipping it is what gives the browser build its effects. See NOTICE.md.
 
       Embedded in THIS assembly rather than the library's. The library deliberately does not compile

@@ -80,16 +80,21 @@ per-vintage kit pages — with one addition each row carries and neither list me
 kit at program 128.
 
 Keys are named from the melodic tone table, because drum sounds *are* melodic tones. Kit names are a
-different matter: the DLL has none, and they live in the plugin's companion `SCVSC.drf`, which is
-Roland's file and not this repository's to carry. So the page reads the user's own copy, optionally
-and exactly as it reads the user's own DLL — without it, kits are known by the program that selects
-them. Inventing "Room" or "Power" here would be writing down a name the application never found.
+different matter: the DLL has none — it will tell you that program 9's key 36 is a `Room Kick 1`, but
+nothing in it says program 9 is `ROOM`. Those names are carried in `DrumKitNames`, transcribed from
+the plugin's `SCVSC.drf` and declared in `NOTICE.md` as the second piece of Roland-derived data here.
+The tests compare every entry against that file where it is installed, because data copied by hand is
+data that can drift. One kit is deliberately unnamed: the CM-64/32L set at program 128, which the ROM
+defines on both rows and neither module's list names.
 
-Banks **126 and 127** are not variations at all but the CM-64 compatibility map, so that a file
-written for Roland's older Computer Music modules plays: 127 is the LA half (MT-32 / CM-32L) and 126
-the PCM half (CM-32P). The ROM agrees with the documentation on both — bank 127's 128 programs carry
-MT-32 tone names rather than Sound Canvas ones, and bank 126 holds exactly the CM-32P's 64 — and both
-are identical across all four vintages, as a map belonging to no generation should be.
+Banks **126 and 127** are not variations at all, and the first column lists them as sound maps of
+their own rather than as variants of a Sound Canvas instrument. They are the CM-64 compatibility map,
+so that a file written for Roland's older Computer Music modules plays: 127 is the LA half
+(MT-32 / CM-32L) and 126 the PCM half (CM-32P). The ROM agrees with the documentation on both — bank
+127's 128 programs carry MT-32 tone names rather than Sound Canvas ones, and bank 126 holds exactly
+the CM-32P's 64 — and both are identical across all four vintages, as a map belonging to no
+generation should be. Selecting one changes what the instrument column lists and drops the family
+headings, since the CM-64 sets are not in General MIDI order and are not GM at all.
 
 ## Mixing while it plays
 
@@ -193,7 +198,8 @@ means the page opens in the remembered vintage rather than settling into it.
 The reverb and chorus coefficients are computed by the real engine at start-up and are stored nowhere
 in the DLL. Harvesting them means executing a 64-bit Windows binary, which a browser cannot do under
 any circumstances. So `presets.json` is committed and embedded in the web application's own
-assembly — the one piece of Roland-derived data this repository carries, set out in `NOTICE.md`.
+assembly — one of the two pieces of Roland-derived data this repository carries, set out in
+`NOTICE.md`. The other is the drum kit names.
 
 It is embedded in *this* assembly rather than the library's on purpose: a host that references
 `TabulaSonora.dll` should not acquire Roland's data by accident. A user who has harvested their own

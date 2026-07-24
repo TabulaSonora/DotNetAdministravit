@@ -755,21 +755,11 @@ p.note {
     outline-offset: -2px;
 }
 
-/* What a bank is, where it is not a variation at all -- the CM-64 compatibility pair. Muted and
-   small, because it qualifies the row rather than competing with the tone's name. */
-.item .badge {
-    flex: none;
-    padding: 0 0.3rem;
-    border-radius: var(--radius-tag);
-    background: var(--surface-3);
-    color: var(--muted);
-    font-size: var(--text-caption);
-    white-space: nowrap;
-}
-
-.item.on .badge {
-    background: color-mix(in srgb, var(--white) 25%, transparent);
-    color: var(--white);
+/* Where a column has nothing to offer rather than nothing yet -- a compatibility set has no
+   variations -- it says so in its own space instead of leaving an empty rectangle. */
+.column-note {
+    margin: 0;
+    padding: var(--space-sm);
 }
 
 .kits {

@@ -2,15 +2,13 @@
 @inject SynthSession Session
 @inject ToneCatalog Catalog
 @inject PlaybackPump Pump
-@inject AssetStore Store
+
 
 @*
     The drum maps: every kit the program map reaches, and for each of them which key plays what.
 
-    Kits are labelled by the programs that select them, and keys by the tone they sound, because that
-    is all the ROM holds. The DLL carries no kit-name or drum-key-name table at all -- those live in
-    the plugin's companion tone files -- so a list saying "Room" or "Power" here would be a name this
-    application invented, not one it read.
+    Keys are named from the melodic tone table, because drum sounds are melodic tones. Kit names are
+    not in the ROM at all and are carried in DrumKitNames instead.
 *@
 
 <section class="panel enter-rise">
@@ -26,10 +24,10 @@
             <label>
                 Kit set
                 <select value="@Session.DrumMapRow" @onchange="RowChanged">
-                    @for (var row = 0; row < SoundCatalog.DrumMapRows; row++)
+                    @for (var row = 0; row < DrumKitNames.RowMaps.Length; row++)
                     {
                         var index = row;
-                        <option value="@index">@RowName(index)</option>
+                        <option value="@index">@DrumKitNames.RowName(index)</option>
                     }
                 </select>
             </label>
@@ -53,59 +51,18 @@
                 var index = kit.Kit;
                 var programs = string.Join(", ", kit.Programs.Take(3).Select(p => p + 1));
                 <button class="kit @(index == Session.DrumKit ? "on" : "")" @onclick="() => SelectAsync(kit)">
-                    <span class="name">@(KitName(kit) ?? $"PC {programs}")</span>
+                    <span class="name">@(DrumKitNames.ForRow(Session.DrumMapRow, kit.Programs[0]) ?? $"PC {programs}")</span>
                     <span class="count">@kit.Keys.Count keys</span>
                 </button>
             }
         </div>
 
-        @* Optional, and it stays here the way the DLL does. The engine's own tables name every drum
-           sound but nothing in them says program 9 is "ROOM" -- those names are in the plugin's file,
-           which is Roland's to distribute and not this page's to carry. *@
-        <div class="row">
-            @if (_names is { IsEmpty: false } loaded)
-            {
-                var named = loaded.CountFor(
-                    RowMaps[Session.DrumMapRow], catalogue.Kits.Select(k => k.Programs[0]));
-
-                @* Named, and named FOR THIS SET. A file can parse, report a healthy count and still
-                   answer nothing here -- GM.drf is one page naming one kit -- and a bare success tag
-                   over a column of program numbers is indistinguishable from the feature being
-                   broken. So the count that matters is the one on screen. *@
-                <span class="tag @(named == 0 ? "tag-warn" : "tag-success")">
-                    @named of @catalogue.Kits.Count named from @loaded.Module
-                </span>
-                <button class="btn btn-secondary btn-tiny" @onclick="ForgetNamesAsync">Forget</button>
-
-                @if (named == 0)
-                {
-                    <span class="note">
-                        That file has no page for this kit set &mdash; it names @loaded.Count kit(s)
-                        across @loaded.Maps.Count page(s). <code>GM.drf</code> is the small one;
-                        <code>SCVSC.drf</code>, in the same folder, is the one that names all of them.
-                    </span>
-                }
-            }
-            else
-            {
-                <label>
-                    Kit names
-                    <input type="file" accept=".drf" @ref="_picker" @onchange="NamesPickedAsync" />
-                </label>
-                <span class="note">
-                    Optional: <code>SCVSC.drf</code> &mdash; not <code>GM.drf</code>, which sits beside
-                    it and names almost nothing &mdash; from the folder holding your
-                    <code>SCCore.dll</code>. Kits are known by their program number until you supply
-                    it, because the names are in that file rather than in the engine. It is read and
-                    kept in this browser, like the DLL.
-                </span>
-            }
-
-            @if (_error is not null)
-            {
-                <span class="error">@_error</span>
-            }
-        </div>
+        <p class="note">
+            Kit names are not in the engine &mdash; it names every drum <em>sound</em>, but nothing in
+            it says program 9 is "ROOM" &mdash; so they are carried here instead. Program 128 is the
+            exception: the CM-64/32L kit is defined by the ROM on both sets and named by neither
+            module's list, so it keeps its number.
+        </p>
 
         @if (catalogue.Kits.FirstOrDefault(k => k.Kit == Session.DrumKit) is { } showing)
         {
@@ -131,93 +88,14 @@
 </section>
 
 @code {
-    /// <summary>The velocity a pad strikes at.</summary>
+    /// <summary>The velocity a strike at the far right of a pad sends.</summary>
     [Parameter]
-    public int Velocity { get; set; } = 100;
-
-    private DrumKitNames? _names;
-    private ElementReference _picker;
-    private string? _error;
-
-    /// <summary>
-    /// Which tone map's kit list each drum map row holds.
-    /// </summary>
-    /// <remarks>
-    /// Measured, not assumed: the set of programs row 0 defines is exactly the one the plugin's own
-    /// <c>SCVSC.drf</c> lists on its SC-8820 page, and row 1's is exactly its SC-88Pro page — in both
-    /// cases plus program 127, the CM-64/32L kit, which the ROM defines and neither page offers. The
-    /// index is also what names the kits, since the file is paged by tone map.
-    /// </remarks>
-    private static readonly int[] RowMaps = [4, 3];
+    public int Velocity { get; set; } = 127;
 
     // Which kit is showing is not this panel's state: it is the engine's, read from it rather than
     // recomputed, because selecting one sends the program change that selects it and a song or a
     // controller moves it the same way.
     protected override void OnInitialized() => Session.Changed += Redraw;
-
-    protected override async Task OnInitializedAsync()
-    {
-        // Supplied on an earlier visit; nothing to ask about.
-        if (await Store.DescribeAsync(AssetStore.DrumNamesKey) is not null)
-        {
-            await LoadNamesAsync();
-        }
-    }
-
-    private static string RowName(int row) =>
-        row < RowMaps.Length ? ToneCatalog.VintageName((ToneMap)RowMaps[row]) : $"row {row}";
-
-    private string? KitName(DrumKitEntry kit)
-    {
-        if (_names is null || Session.DrumMapRow >= RowMaps.Length)
-        {
-            return null;
-        }
-
-        // A kit can be reached by several programs; the first is the one the file names it under.
-        return _names.Lookup(RowMaps[Session.DrumMapRow], kit.Programs[0]);
-    }
-
-    private async Task NamesPickedAsync()
-    {
-        _error = null;
-
-        try
-        {
-            if (await Store.PutFromInputAsync(AssetStore.DrumNamesKey, _picker) is not null)
-            {
-                await LoadNamesAsync();
-            }
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-        }
-    }
-
-    private async Task LoadNamesAsync()
-    {
-        try
-        {
-            if (await Store.ReadAsync(AssetStore.DrumNamesKey) is { } bytes)
-            {
-                _names = DrumKitNames.Parse(bytes);
-            }
-        }
-        catch (InvalidDataException ex)
-        {
-            // A wrong file must not stay cached to fail again on the next visit.
-            _error = ex.Message;
-            await Store.RemoveAsync(AssetStore.DrumNamesKey);
-            _names = null;
-        }
-    }
-
-    private async Task ForgetNamesAsync()
-    {
-        await Store.RemoveAsync(AssetStore.DrumNamesKey);
-        _names = null;
-    }
 
     private void Redraw() => InvokeAsync(StateHasChanged);
 

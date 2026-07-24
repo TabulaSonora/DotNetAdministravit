@@ -20,13 +20,13 @@ That file — and everything derived from it — remains Roland Corporation's:
 - the reverb and chorus coefficients read out of the running engine
 - any audio decoded or rendered from the above
 
-With one exception, stated below, none of that is committed here and none of it is redistributed.
+With two exceptions, stated below, none of that is committed here and none of it is redistributed.
 `.gitignore` excludes each category and names the command that regenerates it locally.
 `manifest.json` is tracked because it is a map of *where* those tables live, not the tables
 themselves — the same distinction the upstream
 [TabulaSonora spec](https://github.com/TabulaSonora/spec) draws.
 
-## The exception: `Effects/presets.json`
+## The first exception: `Effects/presets.json`
 
 `src/TabulaSonora/Effects/presets.json` — about 27 KB of reverb and chorus coefficients, plus the
 delay preset table — **is** committed, and it is Roland-derived. That is a deliberate departure from
@@ -42,6 +42,29 @@ Nothing else changes. The wave ROM, the tables and any rendered audio remain exc
 is still inert without a DLL you supply yourself. If you are redistributing this repository and would
 rather not carry that file, delete it: the library treats missing presets as a run-time condition with
 instructions attached, and the web app accepts one uploaded by the user instead.
+
+## The second exception: the drum kit names
+
+`src/TabulaSonora.Web/Services/DrumKitNames.cs` carries **62 kit names** — "STANDARD 1", "ROOM",
+"TR-808" and the rest — transcribed from the kit-name pages of `SCVSC.drf`, one of the tone files
+that ships beside `SCCore.dll`. They are names, not data the engine reads: nothing here loads that
+file, and the engine's behaviour is identical without them.
+
+They are committed for the same reason instrument and patch name lists ship with sequencers
+generally — Cakewalk instrument definitions, Logic and Cubase patch scripts, and the MIDI
+Manufacturers Association's own MIDI Name Document format all exist to carry exactly this. A drum
+kit called "ROOM" is a label for program 9, published in the owner's manual of every module that has
+one.
+
+Only the two pages the engine can actually reach are included: the SC-8820 and SC-88Pro kit lists,
+which are what the drum program map's two rows hold. One kit is deliberately left unnamed — the
+CM-64/32L set at program 128, which the ROM defines and neither of those lists names.
+
+If you are redistributing this repository and would rather not carry them, replace the two
+dictionaries in that file with empty ones: kits then show the program number that selects them, and
+nothing else changes.
+
+## Obtaining the DLL
 
 Obtain the DLL from your own licensed installation. Sound Canvas VA was discontinued in September
 2024.
