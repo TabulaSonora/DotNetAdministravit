@@ -122,7 +122,7 @@
 
                 <div class="column">
                     <div class="column-head">Variant</div>
-                    @if (Emulation is { } fixedBank)
+                    @if (Emulation is not null)
                     {
                         <p class="note column-note">
                             A compatibility set has no variations: the bank is the map.
@@ -264,13 +264,16 @@
                  bank.Bank.ToString() == _search)
          select new Hit(bank.Bank, entry)).Take(SearchLimit);
 
-    // Opening an instrument sounds its capital tone as well as listing its variants. A column that
-    // only narrowed the next one would leave the middle click silent, and the point of the panel is
-    // to hear things.
+    // Opening an instrument sounds it as well as listing its variants. A column that only narrowed
+    // the next one would leave the middle click silent, and the point of the panel is to hear things.
+    //
+    // Into the bank being browsed, NOT bank 0. Inside a compatibility set the capital is a different
+    // sound map, so selecting it there both sounded the wrong instrument and threw the first column
+    // back to the vintage the CM-64 entry was chosen from.
     private Task OpenAsync(int program)
     {
         _browsing = program;
-        return SelectAsync(bank: 0, program);
+        return SelectAsync(Emulation ?? 0, program);
     }
 
     private async Task SelectAsync(int bank, int program)
