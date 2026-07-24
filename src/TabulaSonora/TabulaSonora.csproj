@@ -12,6 +12,16 @@
 
   <ItemGroup>
     <!--
+      The vector kernels in Dsp/Simd.cs are internal on purpose: they are an implementation detail
+      of the mix paths, not API. Their whole claim is that they are bit-identical to the scalar
+      loops they replace, and that claim has to be asserted directly rather than inferred from a
+      render, so the tests need to see them.
+    -->
+    <InternalsVisibleTo Include="TabulaSonora.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
       Effect coefficients are read out of SCCore.dll and are Roland's, so they are NOT embedded and
       NOT committed. Build them locally with 'tabula-sonora bake-presets'; the condition means the
       build still succeeds without them and the failure surfaces at run time with instructions.
