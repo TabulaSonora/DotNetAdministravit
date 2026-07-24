@@ -570,12 +570,13 @@
       "subsystem": "DIR",
       "dtype": "bytes",
       "shape": "0x100 stride",
-      "size": 524288,
+      "size": 604928,
       "file_offset": "0x18f1810",
       "va": null,
       "section_adjust": null,
       "match": "full",
-      "purpose": "tone records (header 0x24 + 4 partial 0x6e blocks)"
+      "purpose": "tone records (header 0x24 + 4 partial 0x6e blocks), 2363 records",
+      "note": "was 0x80000 (2048 records), which was short: drum kits reference tones up to 2353, and those records read as ordinary tones -- 2049 is 'Tabla_Te', 2071 'Standard KK1'. The engine bounds this table nowhere (tone_lookup indexes it after testing only tone# < 0x4000), so the length is a layout fact: records read as tone records through 2362 and stop at 2363, and the next known object starts at 0x1985420. Confirmed against the DLL: program 49 note 57 on the drum part sounds at peak 0.118 there and rendered silent here."
     },
     {
       "name": "tvf_ceil_a7ed0.bin",

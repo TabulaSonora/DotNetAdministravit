@@ -18,10 +18,29 @@ public class PatchDirectoryTests
     {
         var directory = Load();
 
-        Assert.Equal(2048, directory.ToneCount);
+        // 2363, not the round 2048 this once said. Nothing in the engine bounds the melodic table --
+        // tone_lookup tests only tone# < 0x4000 and indexes -- so a power of two was a guess, and it
+        // cut 315 records off the end. Drum kits reach tone 2353; see the note on the manifest entry.
+        Assert.Equal(2363, directory.ToneCount);
         Assert.Equal(2048, directory.MultisampleCount);
         Assert.Equal(4096, directory.WaveCount);
         Assert.Equal(50, directory.AlternateCount);
+    }
+
+    [SkippableFact]
+    public void TonesPastTheOldSliceAreOrdinaryRecords()
+    {
+        var directory = Load();
+
+        // The records the short slice hid. Named, and named as what the kits use them for: these are
+        // the keys that rendered silent on every kit that reached past 2047.
+        Assert.Equal("Req_tik", directory.GetTone(2048)!.Name.Trim());
+        Assert.Equal("Tabla_Te", directory.GetTone(2049)!.Name.Trim());
+        Assert.Equal("Standard KK1", directory.GetTone(2071)!.Name.Trim());
+        Assert.Equal("ConcertBD Mt", directory.GetTone(2362)!.Name.Trim());
+
+        // And the table really does stop there: one past the end is not a record.
+        Assert.Null(directory.GetTone(2363));
     }
 
     [SkippableFact]
