@@ -1,3 +1,4 @@
+@using System.Globalization
 @inject SynthSession Session
 
 @*
@@ -49,6 +50,24 @@
     </div>
 
     <div class="row">
+        <label class="gain">
+            Volume
+            @* Range rather than a number field: this is a listening trim, not a value anyone needs to
+               type, and the readout keeps it honest about where it is. *@
+            <input type="range" min="0" max="2" step="0.01"
+                   value="@Session.OutputGain.ToString("0.00", CultureInfo.InvariantCulture)"
+                   @oninput="GainChanged" />
+            <span class="gain-readout">@Session.OutputGain.ToString("0.00", CultureInfo.InvariantCulture)&times;</span>
+        </label>
+
+        <span class="note">
+            A trim on the way out, applied after the effect mix. It does not touch the engine, so
+            nothing sounding is disturbed and every level the DLL comparisons rest on is unchanged at
+            1.00.
+        </span>
+    </div>
+
+    <div class="row">
         <button class="btn btn-secondary" @onclick="() => Session.Panic()">Panic</button>
         <span class="note">Silences everything and returns every part to its power-on state.</span>
     </div>
@@ -66,6 +85,15 @@
 </section>
 
 @code {
+    private void GainChanged(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture,
+                            out var gain))
+        {
+            Session.OutputGain = Math.Clamp(gain, 0.0, 2.0);
+        }
+    }
+
     private void MapChanged(ChangeEventArgs e)
     {
         if (int.TryParse(e.Value?.ToString(), out var map))

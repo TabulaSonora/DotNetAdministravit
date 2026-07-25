@@ -127,8 +127,9 @@ header .sec-label {
     gap: 1.75rem;
     /* auto, not 0: this rule comes after the one that centres header/main/footer/.nav and has the
        same specificity, so a horizontal 0 here silently replaces that `margin: 0 auto` and leaves the
-       nav hard against the body padding while everything else stays centred. */
-    margin: var(--space-md) auto;
+       nav hard against the body padding while everything else stays centred. No vertical margin --
+       it is sticky, and a gap above it only shows the page sliding through on the way past. */
+    margin: 0 auto;
     padding: 0.6rem 0;
     background: var(--nav-bg);
     backdrop-filter: blur(8px);
@@ -1038,4 +1039,29 @@ footer p {
     align-items: center;
     cursor: pointer;
     float: right;
+}
+
+/* ── Output trim ────────────────────────────────────────────────────────────── */
+
+/* Laid out along the row rather than stacked like the other labels, so the slider and its readout
+   read as one control instead of a caption above a bar. */
+.gain {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.gain input[type="range"] {
+    width: 12rem;
+    max-width: 100%;
+    accent-color: var(--accent);
+}
+
+/* Tabular figures and a fixed width, so the row does not jog sideways as the number changes. */
+.gain-readout {
+    font-family: var(--font-mono);
+    font-size: var(--text-label);
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    min-width: 3.5ch;
 }

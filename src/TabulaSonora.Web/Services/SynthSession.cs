@@ -78,6 +78,7 @@ public sealed class SynthSession : IDisposable
 
     private EngineSettings _settings = EngineSettings.Default;
     private int _drumMapRow;
+    private double _outputGain = 1.0;
 
     /// <summary>Per-channel mute and solo, shared with every generator this session builds.</summary>
     public ChannelMask Channels { get; } = new();
@@ -177,7 +178,18 @@ public sealed class SynthSession : IDisposable
     public ToneMap Map
     {
         get => _settings.Map;
-        set => Reconfigure(() => _settings = _settings with { Map = value });
+        set => Reconfigure(() =>
+        {
+            _settings = _settings with { Map = value };
+
+            // The module takes the drum map row from the part's internal bank code, so the row is not
+            // an independent setting: changing vintage changes which kits a program reaches. Leaving
+            // it behind is what made an SC-55 render sound its drums out of the SC-8820 kit.
+            if (DrumKitTable.RowForMap(value) is { } row)
+            {
+                _drumMapRow = row;
+            }
+        });
     }
 
     /// <summary>Whether the reverb runs on its send bus.</summary>
@@ -378,7 +390,7 @@ public sealed class SynthSession : IDisposable
 
         // The drum map row goes with it: an export that resolved kits through a different map than the
         // one being listened to would be a different arrangement, not a rendering of this one.
-        var engine = new ToneGenerator(_notes, Options()) { DrumMapRow = _drumMapRow };
+        var engine = new ToneGenerator(_notes, Options()) { DrumMapRow = _drumMapRow, OutputGain = _outputGain };
         var player = new SequencePlayer(engine, Song.Events);
 
         var total = (int)(Song.LengthSamples + (TailSeconds * ToneGenerator.SampleRate));
@@ -403,9 +415,30 @@ public sealed class SynthSession : IDisposable
         return WavWriter.ToBytes(left, right, ToneGenerator.SampleRate);
     }
 
+    /// <summary>Linear gain on the audio handed to the browser.</summary>
+    /// <remarks>
+    /// Applied on the way out of the engine, so it takes effect on the next block without rebuilding
+    /// the generator and without stopping anything that is sounding.
+    /// </remarks>
+    public double OutputGain
+    {
+        get => _outputGain;
+        set
+        {
+            _outputGain = value;
+            if (_engine is not null)
+            {
+                _engine.OutputGain = value;
+            }
+
+            Changed?.Invoke();
+        }
+    }
+
     private ToneGeneratorOptions Options() => new()
     {
         Map = _settings.Map,
+        OutputGain = _outputGain,
         Reverb = _settings.Reverb,
         Chorus = _settings.Chorus,
         Delay = _settings.Delay,
@@ -433,7 +466,7 @@ public sealed class SynthSession : IDisposable
         var position = _player?.Position ?? 0;
         var previous = _engine?.Parts;
 
-        _engine = new ToneGenerator(_notes, Options()) { DrumMapRow = _drumMapRow };
+        _engine = new ToneGenerator(_notes, Options()) { DrumMapRow = _drumMapRow, OutputGain = _outputGain };
 
         if (previous is not null)
         {

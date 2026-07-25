@@ -152,6 +152,7 @@ public sealed class ToneGenerator
             }
         };
 
+        OutputGain = _options.OutputGain;
         _reverbType = _options.ReverbType;
         _chorusType = _options.ChorusType;
         _delayType = _options.DelayType;
@@ -163,6 +164,14 @@ public sealed class ToneGenerator
     /// <returns>The engine.</returns>
     public static ToneGenerator Create(RomImage rom, ToneGeneratorOptions? options = null) =>
         new(new NoteRenderer(rom), options);
+
+    /// <summary>Linear gain applied to the audio handed to the host.</summary>
+    /// <remarks>
+    /// Seeded from <see cref="ToneGeneratorOptions.OutputGain"/> and settable while the engine runs,
+    /// because it is a trim on the way out rather than something the voice loop reads. It is not part
+    /// of engine state and <see cref="Reset"/> leaves it alone, the same as the tone map.
+    /// </remarks>
+    public double OutputGain { get; set; } = 1.0;
 
     /// <summary>How many samples have been rendered since the last reset.</summary>
     public long Position => _position;
@@ -403,10 +412,10 @@ public sealed class ToneGenerator
             _blockLeft.AsSpan(_blockOffset, count).CopyTo(left[written..]);
             _blockRight.AsSpan(_blockOffset, count).CopyTo(right[written..]);
 
-            if (_options.OutputGain != 1.0)
+            if (OutputGain != 1.0)
             {
-                Simd.Scale(left.Slice(written, count), _options.OutputGain);
-                Simd.Scale(right.Slice(written, count), _options.OutputGain);
+                Simd.Scale(left.Slice(written, count), OutputGain);
+                Simd.Scale(right.Slice(written, count), OutputGain);
             }
 
             _blockOffset += count;

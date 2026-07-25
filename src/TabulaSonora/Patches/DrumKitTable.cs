@@ -119,6 +119,38 @@ public sealed class DrumKitTable
     /// <summary>Number of kit records reachable through the program map.</summary>
     public int KitCount { get; }
 
+    /// <summary>The drum map row a vintage's tone map selects.</summary>
+    /// <param name="map">The tone map.</param>
+    /// <returns>The row, or <see langword="null"/> where no measurement pins one.</returns>
+    /// <remarks>
+    /// <para>
+    /// The module takes this from the part's internal bank code, and that translation is not
+    /// reversed — but which row each vintage ends up on is observable, so it is measured here rather
+    /// than left to the host to guess. Driving the DLL with each tone map in turn and reading back
+    /// the tone it resolves for program 0 on the drum part:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>SC-55 selects row 3, kit 59 — the only row whose kit carries tones 2124,
+    /// 2116 and 2331 on keys 55, 46 and 41.</description></item>
+    /// <item><description>SC-88 selects row 2, kit 47, likewise uniquely.</description></item>
+    /// <item><description>SC-88Pro row 1 and SC-8820 row 0, which the browser build had already
+    /// established by matching each row's set of defined programs against each vintage's kit
+    /// list.</description></item>
+    /// </list>
+    /// <para>
+    /// Rows 4 and 5 exist and no vintage selects them, so nothing here reaches them; a host that
+    /// wants them has to set the row itself.
+    /// </para>
+    /// </remarks>
+    public static int? RowForMap(ToneMap map) => map switch
+    {
+        ToneMap.Sc55 => 3,
+        ToneMap.Sc88 => 2,
+        ToneMap.Sc88Pro => 1,
+        ToneMap.Sc8820 => 0,
+        _ => null,
+    };
+
     /// <summary>Maps an internal bank code to a drum map row.</summary>
     /// <param name="internalBank">Internal bank code; standard GM/GS drum parts use 0x04.</param>
     /// <returns>The map row — 0 for map A, 1 for map B.</returns>
