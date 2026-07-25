@@ -178,6 +178,40 @@ public sealed class NoteRenderer
         return new RenderedNote(left, right, mono, name);
     }
 
+    /// <summary>Largest factor the drum ring may be stretched by.</summary>
+    /// <remarks>
+    /// A bound on the render window, not on the sound. The deepest a file can send is −64 semitones,
+    /// which would want 40×; capping at 16 keeps a single hit's buffers to a few tens of megabytes
+    /// while still covering −48 semitones, past anything a General MIDI kit reaches.
+    /// </remarks>
+    public const double MaxDrumRingScale = 16.0;
+
+    /// <summary>How much longer a hit needs than the nominal ring, given its coarse pitch.</summary>
+    /// <param name="key">The drum key, after any NRPN override.</param>
+    /// <returns>A factor of one or more.</returns>
+    /// <remarks>
+    /// The ring exists because a drum ignores note-off, so the renderer has to decide for itself how
+    /// long to run. A fixed window is wrong once a key is pitched down: the sample plays proportionally
+    /// slower, so the hit outlasts it and is cut off mid-decay. Measured on the real DLL, the splash at
+    /// NRPN 18h = 24 takes 4.68 s to fall 40 dB against 1.15 s untouched — four times the nominal
+    /// 1.8 s ring. Scaling by the inverse pitch ratio covers that with room to spare; the envelope,
+    /// not this window, is what should end the note.
+    /// </remarks>
+    public static double DrumRingScale(DrumKey key)
+    {
+        var ratio = DrumKitTable.CoarsePitchRatio(key.Pitch);
+        return ratio <= 0 ? 1.0 : Math.Clamp(1.0 / ratio, 1.0, MaxDrumRingScale);
+    }
+
+    /// <summary>How much longer a hit needs than the nominal ring, before it is rendered.</summary>
+    /// <param name="note">MIDI note, which selects the kit entry.</param>
+    /// <param name="kit">Kit record index.</param>
+    /// <param name="drumPitch">Coarse-pitch override from NRPN <c>0x18</c>, in semitone steps.</param>
+    /// <returns>A factor of one or more.</returns>
+    /// <remarks>Lets a caller size its own buffers to the same window the render will use.</remarks>
+    public double DrumRingScale(int note, int kit, int drumPitch) =>
+        DrumRingScale(DrumKeyOverrides.Apply(_drums.Key(note, kit), drumPitch, null));
+
     /// <summary>Renders one drum hit.</summary>
     /// <param name="note">MIDI note, which selects the kit entry rather than the pitch.</param>
     /// <param name="velocity">MIDI velocity.</param>
@@ -185,6 +219,13 @@ public sealed class NoteRenderer
     /// <param name="tailSeconds">Extra time past the ring.</param>
     /// <param name="kit">Kit record index.</param>
     /// <param name="volumeCurve">Per-sample part volume, or <see langword="null"/> for unity.</param>
+    /// <param name="drumPitch">
+    /// Coarse-pitch override from NRPN <c>0x18</c> in steps of one semitone; zero leaves the kit's
+    /// own value alone.
+    /// </param>
+    /// <param name="drumPan">
+    /// Panpot override from NRPN <c>0x1C</c>, or <see langword="null"/> to keep the kit's own.
+    /// </param>
     /// <returns>The rendered hit.</returns>
     /// <remarks>
     /// The note does not transpose the sample: the tone resolves at key 60 and the kit's coarse-pitch
@@ -197,10 +238,17 @@ public sealed class NoteRenderer
         double ringSeconds,
         double tailSeconds = 0.4,
         int kit = 0,
-        double[]? volumeCurve = null)
+        double[]? volumeCurve = null,
+        int drumPitch = 0,
+        int? drumPan = null)
     {
-        var sampleCount = (int)((ringSeconds + tailSeconds) * SampleRate);
-        var key = _drums.Key(note, kit);
+        var key = DrumKeyOverrides.Apply(_drums.Key(note, kit), drumPitch, drumPan);
+
+        // The ring stretches with the coarse pitch, and the hold has to stretch with it: the hold is
+        // where note-off lands, and both the TVA and TVF envelopes are sized from it. Leaving it at
+        // the nominal ring builds envelopes shorter than the signal they gate.
+        var ring = ringSeconds * DrumRingScale(key);
+        var sampleCount = (int)((ring + tailSeconds) * SampleRate);
         var resolved = _directory.Resolve(key.Tone, note: 60, velocity);
 
         var left = new float[Math.Max(0, sampleCount)];
@@ -221,7 +269,7 @@ public sealed class NoteRenderer
             var partial = tone.Partials[sounding.PartialIndex];
             var signal = RenderPartial(
                 key.Tone, partial, descriptor, note: 60, velocity,
-                ringSeconds, tailSeconds, sampleCount, pitchAddCurve: null,
+                ring, tailSeconds, sampleCount, pitchAddCurve: null,
                 drumCoarseRatio: coarse);
 
             if (signal is null)

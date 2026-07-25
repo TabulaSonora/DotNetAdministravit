@@ -1,5 +1,6 @@
 using TabulaSonora.Dsp;
 using TabulaSonora.Midi;
+using TabulaSonora.Patches;
 
 namespace TabulaSonora.Realtime;
 
@@ -92,6 +93,24 @@ public sealed class Part
     /// <summary>The selected RPN's LSB.</summary>
     public int RpnLsb { get; set; } = 0x7F;
 
+    /// <summary>The selected NRPN's MSB.</summary>
+    public int NrpnMsb { get; set; } = 0x7F;
+
+    /// <summary>The selected NRPN's LSB, which for the drum parameters is the key number.</summary>
+    public int NrpnLsb { get; set; } = 0x7F;
+
+    /// <summary>
+    /// Whether a CC#6 data entry commits to the selected NRPN rather than the selected RPN.
+    /// </summary>
+    /// <remarks>
+    /// The two share data entry, so the last selection made decides. Tracking this is what keeps a
+    /// file's drum NRPNs out of the bend range.
+    /// </remarks>
+    public bool DataEntryIsNrpn { get; set; }
+
+    /// <summary>Per-drum-key overrides this part has taken from NRPN.</summary>
+    public DrumKeyOverrides DrumKeys { get; } = new();
+
     /// <summary>
     /// Notes whose release is waiting for the damper to lift.
     /// </summary>
@@ -125,6 +144,10 @@ public sealed class Part
         BendRange = 2;
         RpnMsb = 0x7F;
         RpnLsb = 0x7F;
+        NrpnMsb = 0x7F;
+        NrpnLsb = 0x7F;
+        DataEntryIsNrpn = false;
+        DrumKeys.Reset();
         Sustained.Clear();
 
         _volume = SequenceBuilder.DefaultVolume;

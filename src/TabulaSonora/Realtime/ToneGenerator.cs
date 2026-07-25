@@ -593,12 +593,24 @@ public sealed class ToneGenerator
 
                 break;
 
-            case 101: part.RpnMsb = value; break;
-            case 100: part.RpnLsb = value; break;
+            case 101: part.RpnMsb = value; part.DataEntryIsNrpn = false; break;
+            case 100: part.RpnLsb = value; part.DataEntryIsNrpn = false; break;
+
+            case 99: part.NrpnMsb = value; part.DataEntryIsNrpn = true; break;
+            case 98: part.NrpnLsb = value; part.DataEntryIsNrpn = true; break;
 
             case 6:
-                // Data entry commits the selected RPN. RPN 00/00 is the bend range in semitones.
-                if (part.RpnMsb == 0 && part.RpnLsb == 0)
+                // Data entry commits whichever of RPN or NRPN was selected last. RPN 00/00 is the
+                // bend range in semitones; the NRPNs handled here address one drum key each.
+                if (part.DataEntryIsNrpn)
+                {
+                    switch (part.NrpnMsb)
+                    {
+                        case 0x18: part.DrumKeys.SetPitch(part.NrpnLsb, value); break;
+                        case 0x1C: part.DrumKeys.SetPan(part.NrpnLsb, value); break;
+                    }
+                }
+                else if (part.RpnMsb == 0 && part.RpnLsb == 0)
                 {
                     part.BendRange = value;
                 }
@@ -719,7 +731,7 @@ public sealed class ToneGenerator
 
     private void StartDrum(int channel, int note, int velocity)
     {
-        var key = _notes.Drums.Key(note, _drumKit);
+        var key = _parts[channel].DrumKeys.Apply(_notes.Drums.Key(note, _drumKit), note);
         var resolved = _notes.Directory.Resolve(key.Tone, note: 60, velocity);
         var tone = _notes.Directory.GetTone(key.Tone);
         if (tone is null || resolved.Partials.Count == 0)
@@ -742,7 +754,7 @@ public sealed class ToneGenerator
 
         var coarse = DrumKitTable.CoarsePitchRatio(key.Pitch);
         var levelGain = DrumKitTable.LevelGain(key.Level);
-        var ring = (long)(_options.DrumRingSeconds * SampleRate);
+        var ring = (long)(_options.DrumRingSeconds * NoteRenderer.DrumRingScale(key) * SampleRate);
         var group = _pool.BeginNoteGroup();
         var sounded = false;
 

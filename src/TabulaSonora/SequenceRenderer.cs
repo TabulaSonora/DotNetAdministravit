@@ -187,9 +187,16 @@ public sealed class SequenceRenderer
 
             var isDrum = note.Channel == options.DrumChannel;
             var hold = Math.Max(0.0, (note.Off - note.On) / (double)rate);
+
+            // A pitched-down key rings proportionally longer, so the window has to follow it or the
+            // hit is cut off mid-decay -- see NoteRenderer.DrumRingScale.
+            var drumRing = isDrum
+                ? options.DrumRingSeconds * _notes.DrumRingScale(note.Note, kits[index], note.DrumPitch)
+                : 0.0;
+
             var span = (int)Math.Min(
                 total - note.On,
-                (isDrum ? options.DrumRingSeconds + options.DrumTailSeconds : hold + options.TailSeconds) * rate);
+                (isDrum ? drumRing + options.DrumTailSeconds : hold + options.TailSeconds) * rate);
 
             if (span <= 0)
             {
@@ -205,7 +212,7 @@ public sealed class SequenceRenderer
                 // the note's own duration, and the tone's envelope does the decay.
                 voice = _notes.RenderDrumNote(
                     note.Note, note.Velocity, options.DrumRingSeconds, options.DrumTailSeconds,
-                    kits[index], volume);
+                    kits[index], volume, note.DrumPitch, note.DrumPan);
 
                 if (chokeAt.TryGetValue(index, out var cut))
                 {

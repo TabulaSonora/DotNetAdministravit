@@ -1,3 +1,5 @@
+using TabulaSonora.Patches;
+
 namespace TabulaSonora.Midi;
 
 /// <summary>
@@ -99,6 +101,14 @@ public sealed class ControllerTimeline
 /// <param name="ReverbSend">CC#91.</param>
 /// <param name="ChorusSend">CC#93.</param>
 /// <param name="DelaySend">Part delay send, which has no Control Change and arrives only over SysEx.</param>
+/// <param name="DrumPitch">
+/// Coarse-pitch override for this drum key from NRPN <c>0x18</c>, in steps of one semitone. Zero
+/// when the key follows its kit record, which is every key on a melodic part.
+/// </param>
+/// <param name="DrumPan">
+/// Panpot override for this drum key from NRPN <c>0x1C</c>, or <see langword="null"/> when the key
+/// follows its kit record.
+/// </param>
 public readonly record struct NoteRecord(
     int Channel,
     int Note,
@@ -112,7 +122,9 @@ public readonly record struct NoteRecord(
     int Expression,
     int ReverbSend,
     int ChorusSend,
-    int DelaySend);
+    int DelaySend,
+    int DrumPitch = 0,
+    int? DrumPan = null);
 
 /// <summary>Per-channel controller timelines.</summary>
 public sealed class PartTimelines
@@ -226,12 +238,26 @@ public static class SequenceBuilder
 
         // Insertion-ordered rather than a dictionary: the order notes close in is the order they are
         // reported, and a hash table's enumeration order is not stable across removals.
-        var open = new List<(int Channel, int Note, long On, int Velocity)>();
+        var open = new List<(int Channel, int Note, long On, int Velocity, int DrumPitch, int? DrumPan)>();
         var sustained = new List<(int Channel, int Note, long RequestedOff)>();
         var rpnMsb = new int[ChannelCount];
         var rpnLsb = new int[ChannelCount];
         Array.Fill(rpnMsb, 0x7F);
         Array.Fill(rpnLsb, 0x7F);
+
+        // NRPN shares data entry with RPN, so which of the two a CC#6 commits depends on which was
+        // selected last. Without this the drum parameters below land on the bend range instead.
+        var nrpnMsb = new int[ChannelCount];
+        var nrpnLsb = new int[ChannelCount];
+        var dataEntryIsNrpn = new bool[ChannelCount];
+        Array.Fill(nrpnMsb, 0x7F);
+        Array.Fill(nrpnLsb, 0x7F);
+
+        var drumKeys = new DrumKeyOverrides[ChannelCount];
+        for (var i = 0; i < ChannelCount; i++)
+        {
+            drumKeys[i] = new DrumKeyOverrides();
+        }
 
         long lastPosition = 0;
 
@@ -256,7 +282,9 @@ public static class SequenceBuilder
                 Expression: part.Expression.ValueAt(state.On, DefaultExpression),
                 ReverbSend: part.ReverbSend.ValueAt(state.On, DefaultReverbSend),
                 ChorusSend: part.ChorusSend.ValueAt(state.On, DefaultChorusSend),
-                DelaySend: part.DelaySend.ValueAt(state.On, 0)));
+                DelaySend: part.DelaySend.ValueAt(state.On, 0),
+                DrumPitch: state.DrumPitch,
+                DrumPan: state.DrumPan));
         }
 
         foreach (var e in events)
@@ -284,7 +312,13 @@ public static class SequenceBuilder
                     // from onestop.mid's harpsichord passage, each 20-80 ms after being struck.
                     sustained.RemoveAll(s => s.Channel == channel && s.Note == e.Data1);
 
-                    open.Add((channel, e.Data1, e.Position, e.Data2));
+                    // Drum key overrides are latched here rather than read at note-off: they live in
+                    // a mutable per-part table, not a timeline, so a later NRPN would otherwise
+                    // reach back and change a note that had already sounded.
+                    open.Add((
+                        channel, e.Data1, e.Position, e.Data2,
+                        drumKeys[channel].PitchOffset(e.Data1),
+                        drumKeys[channel].PanForHit(e.Data1)));
                     break;
 
                 case 0x80:
@@ -310,7 +344,9 @@ public static class SequenceBuilder
                     break;
 
                 case 0xB0:
-                    ApplyControlChange(e, channel, part, rpnMsb, rpnLsb, sustained, open, CloseNote);
+                    ApplyControlChange(
+                        e, channel, part, rpnMsb, rpnLsb, nrpnMsb, nrpnLsb, dataEntryIsNrpn,
+                        drumKeys[channel], sustained, open, CloseNote);
                     break;
             }
         }
@@ -335,8 +371,12 @@ public static class SequenceBuilder
         PartTimelines part,
         int[] rpnMsb,
         int[] rpnLsb,
+        int[] nrpnMsb,
+        int[] nrpnLsb,
+        bool[] dataEntryIsNrpn,
+        DrumKeyOverrides drumKeys,
         List<(int Channel, int Note, long RequestedOff)> sustained,
-        List<(int Channel, int Note, long On, int Velocity)> open,
+        List<(int Channel, int Note, long On, int Velocity, int DrumPitch, int? DrumPan)> open,
         Action<int, int, long> closeNote)
     {
         var controller = e.Data1;
@@ -371,12 +411,24 @@ public static class SequenceBuilder
 
                 break;
 
-            case 101: rpnMsb[channel] = value; break;
-            case 100: rpnLsb[channel] = value; break;
+            case 101: rpnMsb[channel] = value; dataEntryIsNrpn[channel] = false; break;
+            case 100: rpnLsb[channel] = value; dataEntryIsNrpn[channel] = false; break;
+
+            case 99: nrpnMsb[channel] = value; dataEntryIsNrpn[channel] = true; break;
+            case 98: nrpnLsb[channel] = value; dataEntryIsNrpn[channel] = true; break;
 
             case 6:
-                // Data entry commits the selected RPN. RPN 00/00 is the bend range in semitones.
-                if (rpnMsb[channel] == 0 && rpnLsb[channel] == 0)
+                // Data entry commits whichever of RPN or NRPN was selected last. RPN 00/00 is the
+                // bend range in semitones; the NRPNs handled here address one drum key each.
+                if (dataEntryIsNrpn[channel])
+                {
+                    switch (nrpnMsb[channel])
+                    {
+                        case 0x18: drumKeys.SetPitch(nrpnLsb[channel], value); break;
+                        case 0x1C: drumKeys.SetPan(nrpnLsb[channel], value); break;
+                    }
+                }
+                else if (rpnMsb[channel] == 0 && rpnLsb[channel] == 0)
                 {
                     part.BendRange.Add(e.Position, value);
                 }
