@@ -125,7 +125,10 @@ header .sec-label {
     display: flex;
     align-items: center;
     gap: 1.75rem;
-    margin: var(--space-md) 0;
+    /* auto, not 0: this rule comes after the one that centres header/main/footer/.nav and has the
+       same specificity, so a horizontal 0 here silently replaces that `margin: 0 auto` and leaves the
+       nav hard against the body padding while everything else stays centred. */
+    margin: var(--space-md) auto;
     padding: 0.6rem 0;
     background: var(--nav-bg);
     backdrop-filter: blur(8px);

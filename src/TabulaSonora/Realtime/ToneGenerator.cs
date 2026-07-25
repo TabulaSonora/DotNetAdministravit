@@ -43,6 +43,14 @@ public sealed record ToneGeneratorOptions
     /// </remarks>
     public double DrumRingSeconds { get; init; } = 1.8;
 
+    /// <summary>Linear gain applied to the audio handed to the host.</summary>
+    /// <remarks>
+    /// A trim on the way out, applied where the block is copied to the caller rather than inside the
+    /// block loop, so no voice, effect or feedback path sees it and changing it mid-stream cannot
+    /// disturb the engine's state. One is the default and leaves the output untouched.
+    /// </remarks>
+    public double OutputGain { get; init; } = 1.0;
+
     /// <summary>Per-channel mute and solo, read live so a mixer can change it while sound is running.</summary>
     public ChannelMask? Channels { get; init; }
 }
@@ -394,6 +402,12 @@ public sealed class ToneGenerator
             var count = Math.Min(BlockSize - _blockOffset, left.Length - written);
             _blockLeft.AsSpan(_blockOffset, count).CopyTo(left[written..]);
             _blockRight.AsSpan(_blockOffset, count).CopyTo(right[written..]);
+
+            if (_options.OutputGain != 1.0)
+            {
+                Simd.Scale(left.Slice(written, count), _options.OutputGain);
+                Simd.Scale(right.Slice(written, count), _options.OutputGain);
+            }
 
             _blockOffset += count;
             written += count;

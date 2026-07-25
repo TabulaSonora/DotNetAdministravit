@@ -157,6 +157,7 @@ static int Render(ReadOnlySpan<string> args)
     {
         return Fail("render <SCCore.dll> <input.mid> <output.wav> [--map 1..4] [--drum-map 0|1] " +
                     "[--tail SEC] [--end SEC] [--stream] [--no-reverb] [--no-chorus] [--no-delay] " +
+                    "[--volume GAIN] " +
                     "[--mute 1,2] [--solo 5,6]   (channels are 1-16)");
     }
 
@@ -193,6 +194,9 @@ static int Render(ReadOnlySpan<string> args)
             case "--no-reverb": options = options with { Reverb = false }; break;
             case "--no-chorus": options = options with { Chorus = false }; break;
             case "--no-delay": options = options with { Delay = false }; break;
+            case "--volume":
+                options = options with { OutputGain = double.Parse(args[++i], CultureInfo.InvariantCulture) };
+                break;
             case "--mute":
                 options = options with { Channels = WithChannels(options.Channels, args[++i], mute: true) };
                 break;
@@ -374,6 +378,7 @@ static TabulaSonora.RenderResult RenderStreaming(
         ChorusType = options.ChorusType,
         DelayType = options.DelayType,
         DrumRingSeconds = options.DrumRingSeconds,
+        OutputGain = options.OutputGain,
         Channels = options.Channels,
     });
 

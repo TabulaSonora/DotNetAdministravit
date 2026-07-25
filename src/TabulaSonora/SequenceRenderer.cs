@@ -15,6 +15,15 @@ public sealed record RenderOptions
     /// <summary>Seconds of release and effect tail rendered past the last event.</summary>
     public double TailSeconds { get; init; } = 2.2;
 
+    /// <summary>Linear gain applied to the finished stereo output.</summary>
+    /// <remarks>
+    /// A host-side trim on the way out, not part of the engine: it is applied after the effect mix,
+    /// so it scales the wet and dry alike and nothing upstream of it can see the difference. One
+    /// leaves the output exactly as the engine produced it, which is the default because the
+    /// comparisons this project lives on are against the DLL's own levels.
+    /// </remarks>
+    public double OutputGain { get; init; } = 1.0;
+
     /// <summary>MIDI channel routed to the drum path.</summary>
     public int DrumChannel { get; init; } = 9;
 
@@ -242,6 +251,14 @@ public sealed class SequenceRenderer
         }
 
         MixEffects(sequence, options, left, right, reverbSend, chorusSend, delaySend);
+
+        // The trim goes on before the peak is measured, so the number a caller reports is the peak of
+        // what it will actually write rather than of an intermediate it never sees.
+        if (options.OutputGain != 1.0)
+        {
+            Simd.Scale(left, options.OutputGain);
+            Simd.Scale(right, options.OutputGain);
+        }
 
         // One peak across both channels: maximum is exact under any association, so folding the
         // right channel into the left channel's result is the same number the interleaved scan gave.
