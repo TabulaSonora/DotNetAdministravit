@@ -178,6 +178,26 @@ public sealed class NoteRenderer
         return new RenderedNote(left, right, mono, name);
     }
 
+    /// <summary>The key a drum hit's envelope rates are key-followed by.</summary>
+    /// <param name="key">The drum key, as the kit stores it.</param>
+    /// <param name="drumPitch">Coarse-pitch override from NRPN <c>0x18</c>, in semitone steps.</param>
+    /// <returns>The index for the rate key-follow tables.</returns>
+    /// <remarks>
+    /// <para>
+    /// Not 60, and not the MIDI note. The engine keeps this at <c>voice+0x161</c>, filled by
+    /// <c>voice_trigger_partials</c> as the note plus a transpose, and on a drum part the sum works
+    /// out to the kit's own coarse-pitch plane. Read back off the DLL for the 61 sounding keys of the
+    /// SC-55 standard kit, the plane equals the engine's index for all 61.
+    /// </para>
+    /// <para>
+    /// The NRPN moves it a whole semitone per step, where the same step moves the <em>pitch</em> plane
+    /// by two — the plane runs at 50 cents a step and this index does not. That is why the offset is
+    /// added here rather than reading the already-modified plane back.
+    /// </para>
+    /// </remarks>
+    public static int EnvelopeRateKey(DrumKey key, int drumPitch) =>
+        Math.Clamp(key.Pitch + drumPitch, 0, 0x7F);
+
     /// <summary>Largest factor the drum ring may be stretched by.</summary>
     /// <remarks>
     /// A bound on the render window, not on the sound. The deepest a file can send is −64 semitones,
@@ -242,7 +262,11 @@ public sealed class NoteRenderer
         int drumPitch = 0,
         int? drumPan = null)
     {
-        var key = DrumKeyOverrides.Apply(_drums.Key(note, kit), drumPitch, drumPan);
+        // The kit's own key is kept alongside the overridden one: the envelope rate key-follow is
+        // indexed from the stored plane plus the NRPN offset in semitones, not from the plane after
+        // the override has doubled that offset into it.
+        var kitKey = _drums.Key(note, kit);
+        var key = DrumKeyOverrides.Apply(kitKey, drumPitch, drumPan);
 
         // The ring stretches with the coarse pitch, and the hold has to stretch with it: the hold is
         // where note-off lands, and both the TVA and TVF envelopes are sized from it. Leaving it at
@@ -270,7 +294,8 @@ public sealed class NoteRenderer
             var signal = RenderPartial(
                 key.Tone, partial, descriptor, note: 60, velocity,
                 ring, tailSeconds, sampleCount, pitchAddCurve: null,
-                drumCoarseRatio: coarse);
+                drumCoarseRatio: coarse,
+                envelopeRateKey: EnvelopeRateKey(kitKey, drumPitch));
 
             if (signal is null)
             {
@@ -305,7 +330,8 @@ public sealed class NoteRenderer
         int sampleCount,
         double[]? pitchAddCurve,
         double? drumCoarseRatio = null,
-        double[]? modWheelPerTick = null)
+        double[]? modWheelPerTick = null,
+        int? envelopeRateKey = null)
     {
         var wave = _sampler.Decode(descriptor);
         if (wave is null)
@@ -430,7 +456,8 @@ public sealed class NoteRenderer
         // --- amplitude ---
         var zoneLevel = _directory.ZoneLevel(partial.Multisample, key, partial.KeyCenter);
         var amplitude = _tva.Render(
-            partial, velocity, key, holdSeconds, tailSeconds, zoneLevel, _directory.ToneLevel(toneNumber));
+            partial, velocity, key, holdSeconds, tailSeconds, zoneLevel, _directory.ToneLevel(toneNumber),
+            rateKey: envelopeRateKey);
 
         var lfoTva = _lfo.Modulation(toneNumber, partial, tickCount, LfoDestination.Tva);
         var tremolo = AnyNonZero(lfoTva) ? Expand(lfoTva, sampleCount) : null;

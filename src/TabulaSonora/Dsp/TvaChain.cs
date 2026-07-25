@@ -195,6 +195,14 @@ public sealed class TvaChain
     /// <see cref="SegmentEnvelope.NoteOff"/> when it does. That is what lets the real-time voice loop
     /// and the offline renderer share one implementation.
     /// </remarks>
+    /// <param name="rateKey">
+    /// Index for the two rate key-follow tables when it differs from <paramref name="key"/>. The
+    /// engine keeps it at <c>voice+0x161</c>, which <c>voice_trigger_partials</c> fills from the note
+    /// plus a transpose; on a drum part that works out to the kit's coarse-pitch plane, so it is not
+    /// the MIDI key. Measured over the 61 sounding keys of the SC-55 standard kit, the plane equals
+    /// the engine's index for all 61. <see langword="null"/> uses <paramref name="key"/>, which is
+    /// what a melodic note wants.
+    /// </param>
     public SegmentEnvelope CreateEnvelope(
         PartialParameters partial,
         int velocity,
@@ -202,7 +210,8 @@ public sealed class TvaChain
         int zoneLevel = 127,
         int toneLevel = 127,
         int sampleRate = 32000,
-        double attackMilliseconds = 0.0)
+        double attackMilliseconds = 0.0,
+        int? rateKey = null)
     {
         var raw = partial.Raw;
         var partialLevel = PartialLevel(partial, velocity) ?? velocity;
@@ -220,8 +229,11 @@ public sealed class TvaChain
         // Two key-follow tables, not one. The engine reads g_kf_tvarate0 for the four main segments
         // and g_kf_tvarate1 for the release -- see tva_compute_env_rates, where the two calls to
         // env_rate_scale index different bases with block[0x65] and block[0x66].
-        var mainRate = Envelope.RateScale((_rateKeyFollow0[(raw[0x65] * 0x80) + key] - 0x80) & 0xFF, raw[0x67]);
-        var releaseRate = Envelope.RateScale((_rateKeyFollow1[(raw[0x66] * 0x80) + key] - 0x80) & 0xFF, raw[0x68]);
+        //
+        // Both index by voice+0x161, which is not the MIDI key on a drum part -- see rateKey.
+        var index = rateKey ?? key;
+        var mainRate = Envelope.RateScale((_rateKeyFollow0[(raw[0x65] * 0x80) + index] - 0x80) & 0xFF, raw[0x67]);
+        var releaseRate = Envelope.RateScale((_rateKeyFollow1[(raw[0x66] * 0x80) + index] - 0x80) & 0xFF, raw[0x68]);
 
         // Two velocity level-scales, not one: segments 0-1 use 0x69, segments 2-3 and the release
         // use 0x6a. Sharing one makes the later segments descend far too steeply.
@@ -277,6 +289,14 @@ public sealed class TvaChain
     /// the engine — consistent with the envelope block's own anti-zipper ramp interpolating across
     /// the block.
     /// </remarks>
+    /// <param name="rateKey">
+    /// Index for the two rate key-follow tables when it differs from <paramref name="key"/>. The
+    /// engine keeps it at <c>voice+0x161</c>, which <c>voice_trigger_partials</c> fills from the note
+    /// plus a transpose; on a drum part that works out to the kit's coarse-pitch plane, so it is not
+    /// the MIDI key. Measured over the 61 sounding keys of the SC-55 standard kit, the plane equals
+    /// the engine's index for all 61. <see langword="null"/> uses <paramref name="key"/>, which is
+    /// what a melodic note wants.
+    /// </param>
     public float[] Render(
         PartialParameters partial,
         int velocity,
@@ -286,7 +306,8 @@ public sealed class TvaChain
         int zoneLevel = 127,
         int toneLevel = 127,
         int sampleRate = 32000,
-        double attackMilliseconds = 0.0)
+        double attackMilliseconds = 0.0,
+        int? rateKey = null)
     {
         var sampleCount = (int)((holdSeconds + tailSeconds) * sampleRate);
         if (sampleCount <= 0)
@@ -295,7 +316,7 @@ public sealed class TvaChain
         }
 
         var envelope = CreateEnvelope(
-            partial, velocity, key, zoneLevel, toneLevel, sampleRate, attackMilliseconds);
+            partial, velocity, key, zoneLevel, toneLevel, sampleRate, attackMilliseconds, rateKey);
 
         envelope.NoteOff(Math.Min((int)(holdSeconds * sampleRate), sampleCount));
 

@@ -42,6 +42,23 @@ public sealed class DrumKitTable
     /// <summary>Keys per kit.</summary>
     public const int KeyCount = 128;
 
+    /// <summary>Rows in the drum program map.</summary>
+    /// <remarks>
+    /// <para>
+    /// Six, not the two this read for a long time. Each row maps a program to a kit, and program 0
+    /// resolves to kit 0, 38, 47, 59, 68 and 79 across rows 0 to 5, with 38, 26, 15, 10, 11 and 9
+    /// programs defined in each. Reading two rows sized <see cref="KitCount"/> at 47 and put every
+    /// kit from 47 up out of reach entirely.
+    /// </para>
+    /// <para>
+    /// Measured against the DLL, which is how the short read surfaced: driven with the SC-55 tone map
+    /// on program 0 of the drum part, the engine resolves a tone for all 61 sounding keys that
+    /// <em>kit 59</em> reproduces exactly, 61 of 61 — and kit 59 is only reachable through row 3. The
+    /// best any kit the two-row read could see managed was 30 of 61.
+    /// </para>
+    /// </remarks>
+    public const int MapRowCount = 6;
+
     // Plane offsets within a kit record.
     private const int ToneP1ane = 0x000;   // 128 x u16
     private const int LevelPlane = 0x100;
@@ -72,7 +89,7 @@ public sealed class DrumKitTable
 
         _kitBase = rom.Manifest.Region("drum_kit_records").FileOffset;
         _bankRow = rom.Read(rom.Manifest.Region("drum_bank_row").FileOffset, 256);
-        _programMap = rom.Read(rom.Manifest.Region("drum_prog_map").FileOffset, 2 * 0x80);
+        _programMap = rom.Read(rom.Manifest.Region("drum_prog_map").FileOffset, MapRowCount * 0x80);
 
         var indexBytes = rom.Read(KitIndexOffset, 256 * sizeof(ushort));
         _kitIndex = new ushort[256];
@@ -83,7 +100,7 @@ public sealed class DrumKitTable
 
         // Read only as many records as the index can actually reach.
         var highest = 0;
-        for (var row = 0; row < 2; row++)
+        for (var row = 0; row < MapRowCount; row++)
         {
             for (var program = 0; program < 0x80; program++)
             {
@@ -111,13 +128,18 @@ public sealed class DrumKitTable
     /// Resolves a drum program to its kit record index.
     /// </summary>
     /// <param name="program">Program number on the drum part.</param>
-    /// <param name="row">Map row; 0 is the GM/GS map.</param>
+    /// <param name="row">Map row, 0 to <see cref="MapRowCount"/> minus one; 0 is the GM/GS map.</param>
     /// <returns>
     /// The kit index, or <see langword="null"/> for an undefined program — the engine leaves the kit
     /// unchanged rather than silencing the part.
     /// </returns>
     public int? KitForProgram(int program, int row = 0)
     {
+        if ((uint)row >= MapRowCount)
+        {
+            return null;
+        }
+
         var level2 = _programMap[(row * 0x80) + (program & 0x7F)];
         return level2 == 0xFF ? null : _kitIndex[level2];
     }
