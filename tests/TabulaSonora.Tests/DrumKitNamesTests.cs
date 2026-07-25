@@ -66,9 +66,21 @@ public class DrumKitNamesTests
     [Fact]
     public void TheRowsAreTheModulesTheirContentsIdentify()
     {
-        Assert.Equal(new[] { 4, 3 }, DrumKitNames.RowMaps);
+        // Rows 0 and 1 were identified from their contents -- each row's set of defined programs
+        // matches one vintage's kit list exactly. Rows 2 and 3 could not be, because no kit list is
+        // held for those two vintages, so they come from the DLL instead: driven with the SC-88 and
+        // SC-55 tone maps it resolves drum tones only those rows carry. Rows 4 and 5 exist and no
+        // vintage selects them, so nothing names them.
+        Assert.Equal(new[] { 4, 3, 2, 1 }, DrumKitNames.RowMaps);
         Assert.Equal("SC-8820", DrumKitNames.RowName(0));
         Assert.Equal("SC-88Pro", DrumKitNames.RowName(1));
+        Assert.Equal("SC-88", DrumKitNames.RowName(2));
+        Assert.Equal("SC-55", DrumKitNames.RowName(3));
+
+        // Named by the tone map they belong to, but with no kit list behind them, so their kits are
+        // labelled by the programs that select them rather than by name.
+        Assert.Null(DrumKitNames.ForRow(row: 2, program: 0));
+        Assert.Null(DrumKitNames.ForRow(row: 3, program: 0));
 
         Assert.Equal("STANDARD 1", DrumKitNames.ForRow(row: 0, program: 0));
         Assert.Equal("ROOM", DrumKitNames.ForRow(row: 0, program: 8));

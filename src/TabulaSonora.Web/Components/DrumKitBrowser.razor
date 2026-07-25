@@ -14,7 +14,7 @@
 <section class="panel enter-rise">
     <h2>Drum kits</h2>
 
-    @if (Catalog.DrumsFor(Session.DrumMapRow) is not { } catalogue)
+    @if (Catalog.DrumsFor(Session.EffectiveDrumMapRow) is not { } catalogue)
     {
         <p class="note">No ROM loaded.</p>
     }
@@ -23,7 +23,7 @@
         <div class="row">
             <label>
                 Kit set
-                <select value="@Session.DrumMapRow" @onchange="RowChanged">
+                <select value="@Session.EffectiveDrumMapRow" @onchange="RowChanged">
                     @for (var row = 0; row < DrumKitNames.RowMaps.Length; row++)
                     {
                         var index = row;
@@ -51,7 +51,7 @@
                 var index = kit.Kit;
                 var programs = string.Join(", ", kit.Programs.Take(3).Select(p => p + 1));
                 <button class="kit @(index == Session.DrumKit ? "on" : "")" @onclick="() => SelectAsync(kit)">
-                    <span class="name">@(DrumKitNames.ForRow(Session.DrumMapRow, kit.Programs[0]) ?? $"PC {programs}")</span>
+                    <span class="name">@(DrumKitNames.ForRow(Session.EffectiveDrumMapRow, kit.Programs[0]) ?? $"PC {programs}")</span>
                     <span class="count">@kit.Keys.Count keys</span>
                 </button>
             }

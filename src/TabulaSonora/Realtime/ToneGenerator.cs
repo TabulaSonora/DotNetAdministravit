@@ -228,7 +228,14 @@ public sealed class ToneGenerator
     /// class as <see cref="ToneGeneratorOptions.Map"/>, which also survives.
     /// </para>
     /// </remarks>
-    public int DrumMapRow { get; set; }
+    /// <value>
+    /// <see langword="null"/>, the default, follows the vintage, which is what the module does. Set
+    /// it to reach rows 4 and 5, which no vintage selects. See <see cref="DrumKitTable.RowForMap"/>.
+    /// </value>
+    public int? DrumMapRow { get; set; }
+
+    /// <summary>The drum map row this engine actually resolves against.</summary>
+    public int EffectiveDrumMapRow => DrumMapRow ?? DrumKitTable.RowForMap(_options.Map) ?? 0;
 
     /// <summary>Silences everything and returns every part to its power-on state.</summary>
     public void Reset()
@@ -321,7 +328,7 @@ public sealed class ToneGenerator
             case 0xC0:
                 part.Program = data1;
                 if (channel == _options.DrumChannel &&
-                    _notes.Drums.KitForProgram(data1, DrumMapRow) is { } kit)
+                    _notes.Drums.KitForProgram(data1, EffectiveDrumMapRow) is { } kit)
                 {
                     // An undefined program leaves the current kit in place rather than falling back
                     // to Standard.
@@ -754,7 +761,12 @@ public sealed class ToneGenerator
 
     private void StartDrum(int channel, int note, int velocity)
     {
-        var key = _parts[channel].DrumKeys.Apply(_notes.Drums.Key(note, _drumKit), note);
+        // The kit's own key is kept alongside the overridden one, because the envelope rate
+        // key-follow indexes off the stored plane rather than the plane the override has already
+        // doubled the NRPN offset into -- see NoteRenderer.EnvelopeRateKey.
+        var kitKey = _notes.Drums.Key(note, _drumKit);
+        var key = _parts[channel].DrumKeys.Apply(kitKey, note);
+        var rateKey = NoteRenderer.EnvelopeRateKey(kitKey, _parts[channel].DrumKeys.PitchOffset(note));
         var resolved = _notes.Directory.Resolve(key.Tone, note: 60, velocity);
         var tone = _notes.Directory.GetTone(key.Tone);
         if (tone is null || resolved.Partials.Count == 0)
@@ -791,7 +803,7 @@ public sealed class ToneGenerator
                 continue;
             }
 
-            var (amplitude, cutoff, cutoffBase) = Envelopes(key.Tone, partial, 60, velocity);
+            var (amplitude, cutoff, cutoffBase) = Envelopes(key.Tone, partial, 60, velocity, rateKey);
             var (lfo1, lfo2) = _notes.Lfo.CreateRunners(key.Tone, partial);
 
             // The note does not transpose the sample: the tone sounds at its own root, trimmed by the
@@ -834,11 +846,12 @@ public sealed class ToneGenerator
     }
 
     private (SegmentEnvelope Amplitude, SegmentEnvelope Cutoff, int CutoffBase) Envelopes(
-        int toneNumber, PartialParameters partial, int key, int velocity)
+        int toneNumber, PartialParameters partial, int key, int velocity, int? rateKey = null)
     {
         var zoneLevel = _notes.Directory.ZoneLevel(partial.Multisample, key, partial.KeyCenter);
         var amplitude = _notes.Tva.CreateEnvelope(
-            partial, velocity, key, zoneLevel, _notes.Directory.ToneLevel(toneNumber), SampleRate);
+            partial, velocity, key, zoneLevel, _notes.Directory.ToneLevel(toneNumber), SampleRate,
+            rateKey: rateKey);
 
         var (cutoff, cutoffBase) = _notes.Tvf.CreateEnvelope(partial, velocity, key, SampleRate);
         return (amplitude, cutoff, cutoffBase);

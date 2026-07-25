@@ -102,7 +102,14 @@ public static class DrumKitNames
     /// Measured rather than assumed: the set of programs each row defines matches one page's set of
     /// kits exactly, in both cases plus program 127, which the ROM carries and no page offers.
     /// </remarks>
-    public static readonly int[] RowMaps = [4, 3];
+    /// <remarks>
+    /// Rows 2 and 3 were added once the program map turned out to hold six rows rather than two, and
+    /// come from the DLL rather than from program sets: driven with the SC-88 and SC-55 tone maps, the
+    /// engine resolves drum tones that only rows 2 and 3 carry. No kit names are listed for those two
+    /// pages, so their kits fall back to being labelled by the programs that select them. Rows 4 and 5
+    /// no vintage selects and nothing here names them.
+    /// </remarks>
+    public static readonly int[] RowMaps = [4, 3, 2, 1];
 
     /// <summary>Names the kit a program selects.</summary>
     /// <param name="row">Drum map row.</param>

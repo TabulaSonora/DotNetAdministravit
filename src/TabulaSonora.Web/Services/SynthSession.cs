@@ -77,7 +77,7 @@ public sealed class SynthSession : IDisposable
     private SequencePlayer? _player;
 
     private EngineSettings _settings = EngineSettings.Default;
-    private int _drumMapRow;
+    private int? _drumMapRow;
     private double _outputGain = 1.0;
 
     /// <summary>Per-channel mute and solo, shared with every generator this session builds.</summary>
@@ -147,7 +147,12 @@ public sealed class SynthSession : IDisposable
     /// remembered between visits: <see cref="EnginePreferences"/> stores exactly the four values a
     /// rebuild depends on, and a fifth field would invalidate every preference already stored.
     /// </remarks>
-    public int DrumMapRow
+    /// <value>
+    /// <see langword="null"/> follows the vintage, which is what the module does — the row comes from
+    /// the part's internal bank code, so changing vintage changes which kits a program reaches. Set
+    /// it only to reach rows 4 and 5, which no vintage selects.
+    /// </value>
+    public int? DrumMapRow
     {
         get => _drumMapRow;
         set
@@ -161,6 +166,10 @@ public sealed class SynthSession : IDisposable
             Changed?.Invoke();
         }
     }
+
+    /// <summary>The drum map row currently in force, with the vintage's default resolved.</summary>
+    public int EffectiveDrumMapRow =>
+        _drumMapRow ?? DrumKitTable.RowForMap(_settings.Map) ?? 0;
 
     /// <summary>All four engine settings at once.</summary>
     /// <remarks>
@@ -178,18 +187,7 @@ public sealed class SynthSession : IDisposable
     public ToneMap Map
     {
         get => _settings.Map;
-        set => Reconfigure(() =>
-        {
-            _settings = _settings with { Map = value };
-
-            // The module takes the drum map row from the part's internal bank code, so the row is not
-            // an independent setting: changing vintage changes which kits a program reaches. Leaving
-            // it behind is what made an SC-55 render sound its drums out of the SC-8820 kit.
-            if (DrumKitTable.RowForMap(value) is { } row)
-            {
-                _drumMapRow = row;
-            }
-        });
+        set => Reconfigure(() => _settings = _settings with { Map = value });
     }
 
     /// <summary>Whether the reverb runs on its send bus.</summary>

@@ -34,7 +34,15 @@ public sealed record RenderOptions
     /// not reversed, so nothing in a MIDI file can reach the second map. Both renderers have to take
     /// it the same way or a file would render differently through the two paths.
     /// </remarks>
-    public int DrumMapRow { get; init; }
+    /// <value>
+    /// <see langword="null"/>, the default, follows the vintage — which is what the module does, since
+    /// it takes the row from the part's internal bank code. Set it to reach rows 4 and 5, which no
+    /// vintage selects. See <see cref="DrumKitTable.RowForMap"/>.
+    /// </value>
+    public int? DrumMapRow { get; init; }
+
+    /// <summary>The drum map row this render actually resolves against.</summary>
+    public int EffectiveDrumMapRow => DrumMapRow ?? DrumKitTable.RowForMap(Map) ?? 0;
 
     /// <summary>
     /// Run the reverb on its send bus. On by default — the module always has it, and a GM reset
@@ -285,7 +293,7 @@ public sealed class SequenceRenderer
             .Where(x => x.Note.Channel == options.DrumChannel)
             .OrderBy(x => x.Note.On))
         {
-            if (_notes.Drums.KitForProgram(note.Program, options.DrumMapRow) is { } resolved)
+            if (_notes.Drums.KitForProgram(note.Program, options.EffectiveDrumMapRow) is { } resolved)
             {
                 current = resolved;
             }
