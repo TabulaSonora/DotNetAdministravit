@@ -36,6 +36,7 @@ public sealed class TvaChain
     private readonly byte[] _scaleCurve;
     private readonly byte[] _levelKeyFollow;
     private readonly byte[] _rateKeyFollow0;
+    private readonly byte[] _rateKeyFollow1;
     private readonly byte[] _velocityCrossfade;
 
     /// <summary>Creates the chain over a loaded table set.</summary>
@@ -54,6 +55,7 @@ public sealed class TvaChain
         _scaleCurve = tables.EnvScaleCurve;
         _levelKeyFollow = tables.KfTvaLevel;
         _rateKeyFollow0 = tables.KfTvaRate0;
+        _rateKeyFollow1 = tables.KfTvaRate1;
         _velocityCrossfade = tables.VelXfade;
     }
 
@@ -215,8 +217,11 @@ public sealed class TvaChain
             targets[i] = level <= 0 ? 0.0 : AmpScale * AmpOf(level);
         }
 
+        // Two key-follow tables, not one. The engine reads g_kf_tvarate0 for the four main segments
+        // and g_kf_tvarate1 for the release -- see tva_compute_env_rates, where the two calls to
+        // env_rate_scale index different bases with block[0x65] and block[0x66].
         var mainRate = Envelope.RateScale((_rateKeyFollow0[(raw[0x65] * 0x80) + key] - 0x80) & 0xFF, raw[0x67]);
-        var releaseRate = Envelope.RateScale((_rateKeyFollow0[(raw[0x66] * 0x80) + key] - 0x80) & 0xFF, raw[0x68]);
+        var releaseRate = Envelope.RateScale((_rateKeyFollow1[(raw[0x66] * 0x80) + key] - 0x80) & 0xFF, raw[0x68]);
 
         // Two velocity level-scales, not one: segments 0-1 use 0x69, segments 2-3 and the release
         // use 0x6a. Sharing one makes the later segments descend far too steeply.
