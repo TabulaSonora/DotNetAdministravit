@@ -345,37 +345,60 @@ public sealed class NoteRenderer
         }
 
         var key = Math.Clamp(note, 0, 0x7F);
-        var tickCount = (int)Math.Ceiling(sampleCount / (double)ControlBlock) + 1;
 
-        // The hold clock: a delayed layer's envelopes and LFOs all start late, and a one-shot's
-        // never start at all — every control value stays where the note-on compute left it. The
-        // sample is NOT delayed; it runs from note-on under the frozen values.
+        // The envelope hold clock. An armed voice renders nothing at all — the wave's read position
+        // and every control value stay frozen (verified against the DLL's live sampler state) — and
+        // when the clock fires the whole voice simply starts. A delayed layer is therefore the same
+        // voice time-shifted by the delay; a key-off (0xff) layer fires on the control tick after
+        // note-off with no release pending — the ".o" key-off sound.
         var hold = _envelopes.HoldSamples(partial, velocity);
-        var suspended = hold == EnvelopeMachine.HoldForever;
-        var holdSamples = suspended ? 0L : hold;
-        if (holdSamples > 0 && holdSeconds * SampleRate <= holdSamples)
+        int startAt;
+        double localHold;
+        var localTail = tailSeconds;
+        if (hold == EnvelopeMachine.HoldForever)
         {
-            // Note-off landed while the delay was still running: the engine kills the armed voice
-            // before it has ever sounded.
+            var fireAt = ((long)(holdSeconds * SampleRate) + ControlBlock - 1) / ControlBlock * ControlBlock;
+            startAt = (int)Math.Min(sampleCount, fireAt);
+            localHold = ((sampleCount - startAt) / (double)SampleRate) + 1.0;   // never released in-window
+            localTail = 0.0;
+        }
+        else if (hold > 0)
+        {
+            if (holdSeconds * SampleRate <= hold)
+            {
+                // Note-off landed while the delay was still running: the engine kills the armed
+                // voice before it has ever sounded.
+                return null;
+            }
+
+            startAt = (int)hold;
+            localHold = holdSeconds - (startAt / (double)SampleRate);
+        }
+        else
+        {
+            startAt = 0;
+            localHold = holdSeconds;
+        }
+
+        var span = sampleCount - startAt;
+        if (span <= 0)
+        {
             return null;
         }
 
-        var holdTicks = (int)(holdSamples / ControlBlock);
-        var envelopeHoldSeconds = holdSeconds - (holdSamples / (double)SampleRate);
+        var tickCount = (int)Math.Ceiling(span / (double)ControlBlock) + 1;
 
-        var envelope = PitchEnvelopeTicksHeld(partial, key, velocity, holdSeconds, tickCount, holdTicks, suspended);
+        var envelope = _pitch.EnvelopeTicks(partial, key, velocity, localHold, tickCount);
 
         // The mod wheel adds vibrato depth to LFO1 only, and only while it is actually moved.
-        var lfoPitch = suspended
-            ? null
-            : ShiftTicks(modWheelPerTick is null
-                ? _lfo.Modulation(toneNumber, partial, tickCount, LfoDestination.Pitch)
-                : _lfo.PitchModulationWithWheel(toneNumber, partial, tickCount, modWheelPerTick), holdTicks);
+        var lfoPitch = modWheelPerTick is null
+            ? _lfo.Modulation(toneNumber, partial, tickCount, LfoDestination.Pitch)
+            : _lfo.PitchModulationWithWheel(toneNumber, partial, tickCount, modWheelPerTick);
 
-        var pitchEnvelope = envelope is null ? null : Expand(envelope, sampleCount);
-        var pitchLfo = lfoPitch is not null && AnyNonZero(lfoPitch) ? Expand(lfoPitch, sampleCount) : null;
+        var pitchEnvelope = envelope is null ? null : Expand(envelope, span);
+        var pitchLfo = AnyNonZero(lfoPitch) ? Expand(lfoPitch, span) : null;
 
-        var ratios = new double[sampleCount];
+        var ratios = new double[span];
 
         if (drumCoarseRatio is { } coarse)
         {
@@ -395,7 +418,7 @@ public sealed class NoteRenderer
             var lastModulation = double.NaN;
             var lastRatio = 0.0;
 
-            for (var i = 0; i < sampleCount; i++)
+            for (var i = 0; i < span; i++)
             {
                 var modulation = 0.0;
                 if (pitchEnvelope is not null)
@@ -432,7 +455,7 @@ public sealed class NoteRenderer
             var lastPitch = double.NaN;
             var lastRatio = 0.0;
 
-            for (var i = 0; i < sampleCount; i++)
+            for (var i = 0; i < span; i++)
             {
                 var pitch = basePitch;
                 if (pitchEnvelope is not null)
@@ -447,7 +470,8 @@ public sealed class NoteRenderer
 
                 if (pitchAddCurve is not null)
                 {
-                    pitch += pitchAddCurve[Math.Min(i, pitchAddCurve.Length - 1)];
+                    // The curve is in absolute note time; a held voice reads it from where it fires.
+                    pitch += pitchAddCurve[Math.Min(startAt + i, pitchAddCurve.Length - 1)];
                 }
 
                 if (pitch != lastPitch)
@@ -460,29 +484,17 @@ public sealed class NoteRenderer
             }
         }
 
-        var signal = _sampler.PlayVariable(wave, sampleCount, ratios);
+        var signal = _sampler.PlayVariable(wave, span, ratios);
 
         // --- filter: the cutoff envelope with the LFO added, then clamped, as the engine does ---
-        var cutoff = _tvf.Envelope(partial, velocity, key, envelopeHoldSeconds, tailSeconds);
-        if (suspended)
+        var cutoff = _tvf.Envelope(partial, velocity, key, localHold, localTail);
+        var lfoTvf = _lfo.Modulation(toneNumber, partial, tickCount, LfoDestination.Tvf);
+        if (AnyNonZero(lfoTvf))
         {
-            Array.Fill(cutoff, cutoff.Length > 0 ? cutoff[0] : 0.0);
-        }
-        else if (holdSamples > 0)
-        {
-            cutoff = ShiftSamples(cutoff, holdSamples, sampleCount, cutoff.Length > 0 ? cutoff[0] : 0.0);
-        }
-
-        if (!suspended)
-        {
-            var lfoTvf = ShiftTicks(_lfo.Modulation(toneNumber, partial, tickCount, LfoDestination.Tvf), holdTicks);
-            if (AnyNonZero(lfoTvf))
+            var expanded = Expand(lfoTvf, cutoff.Length);
+            for (var i = 0; i < cutoff.Length; i++)
             {
-                var expanded = Expand(lfoTvf, cutoff.Length);
-                for (var i = 0; i < cutoff.Length; i++)
-                {
-                    cutoff[i] = Math.Clamp(cutoff[i] + expanded[i], 0, 0x7FFF);
-                }
+                cutoff[i] = Math.Clamp(cutoff[i] + expanded[i], 0, 0x7FFF);
             }
         }
 
@@ -491,25 +503,13 @@ public sealed class NoteRenderer
         // --- amplitude ---
         var zoneLevel = _directory.ZoneLevel(partial.Multisample, key, partial.KeyCenter);
         var amplitude = _tva.Render(
-            partial, velocity, key, envelopeHoldSeconds, tailSeconds, zoneLevel, _directory.ToneLevel(toneNumber),
+            partial, velocity, key, localHold, localTail, zoneLevel, _directory.ToneLevel(toneNumber),
             rateKey: envelopeRateKey);
 
-        if (suspended)
-        {
-            amplitude = SuspendedAmplitude(amplitude, sampleCount, (long)(holdSeconds * SampleRate));
-        }
-        else if (holdSamples > 0)
-        {
-            amplitude = ShiftSamples(amplitude, holdSamples, sampleCount,
-                amplitude.Length > 0 ? amplitude[0] : 0f);
-        }
+        var lfoTva = _lfo.Modulation(toneNumber, partial, tickCount, LfoDestination.Tva);
+        var tremolo = AnyNonZero(lfoTva) ? Expand(lfoTva, span) : null;
 
-        var lfoTva = suspended
-            ? null
-            : ShiftTicks(_lfo.Modulation(toneNumber, partial, tickCount, LfoDestination.Tva), holdTicks);
-        var tremolo = lfoTva is not null && AnyNonZero(lfoTva) ? Expand(lfoTva, sampleCount) : null;
-
-        for (var i = 0; i < sampleCount && i < amplitude.Length; i++)
+        for (var i = 0; i < span && i < amplitude.Length; i++)
         {
             var gain = (double)amplitude[i];
             if (tremolo is not null)
@@ -521,7 +521,16 @@ public sealed class NoteRenderer
             signal[i] = (float)(signal[i] * gain);
         }
 
-        return signal;
+        if (startAt == 0)
+        {
+            return signal;
+        }
+
+        // A held voice is the same voice starting late: silence to the fire point, the rendered
+        // span after it.
+        var shifted = new float[sampleCount];
+        Array.Copy(signal, 0, shifted, startAt, span);
+        return shifted;
     }
 
     private static void ApplyVolume(float[] left, float[] right, float[] mono, double[]? volumeCurve)
@@ -579,98 +588,4 @@ public sealed class NoteRenderer
     }
 
     private static bool AnyNonZero(double[] values) => Simd.AnyNonZero(values);
-
-    /// <summary>
-    /// The pitch envelope per control tick, honouring the hold clock.
-    /// </summary>
-    /// <remarks>
-    /// While the hold runs the runner is read without being stepped, so the head of the series is
-    /// the envelope's start level — the value the note-on compute froze — and the machine then runs
-    /// from the top when the hold expires. A suspended (one-shot) envelope never leaves that level.
-    /// Note-off is on absolute time: a delayed envelope that starts 3 ticks late and is released at
-    /// tick 50 has run for 47 of its own ticks, exactly as the engine's armed clock leaves it.
-    /// </remarks>
-    private double[]? PitchEnvelopeTicksHeld(
-        PartialParameters partial,
-        int key,
-        int velocity,
-        double holdSeconds,
-        int tickCount,
-        int holdTicks,
-        bool suspended)
-    {
-        var runner = _pitch.CreateEnvelopeRunner(partial, key, velocity);
-        if (runner is null)
-        {
-            return null;
-        }
-
-        var output = new double[Math.Max(0, tickCount)];
-        if (suspended)
-        {
-            Array.Fill(output, runner.Level);
-            return output;
-        }
-
-        var noteOffTick = (int)(holdSeconds * 100);
-        for (var i = 0; i < output.Length; i++)
-        {
-            output[i] = i < holdTicks ? runner.Level : runner.Tick(i >= noteOffTick);
-        }
-
-        return output;
-    }
-
-    /// <summary>Delays a per-tick series by a hold, with silence at the head.</summary>
-    private static double[] ShiftTicks(double[] ticks, int holdTicks)
-    {
-        if (holdTicks == 0)
-        {
-            return ticks;
-        }
-
-        var result = new double[ticks.Length];
-        Array.Copy(ticks, 0, result, holdTicks, Math.Max(0, ticks.Length - holdTicks));
-        return result;
-    }
-
-    /// <summary>Delays a per-sample series by a hold, repeating its first value across the head.</summary>
-    private static T[] ShiftSamples<T>(T[] values, long holdSamples, int totalLength, T head)
-    {
-        var result = new T[totalLength];
-        var holdLength = (int)Math.Min(holdSamples, totalLength);
-        Array.Fill(result, head, 0, holdLength);
-
-        var copy = Math.Min(values.Length, totalLength - holdLength);
-        if (copy > 0)
-        {
-            Array.Copy(values, 0, result, holdLength, copy);
-        }
-
-        return result;
-    }
-
-    /// <summary>
-    /// A one-shot's amplitude: the note-on level held flat, then the engine's fast fade at note-off.
-    /// </summary>
-    /// <remarks>
-    /// The fade constants match the realtime voice's choke — full for 128 samples, linear to silence
-    /// over the next 192 — which is the model of the ramp the engine's armed-clock note-off path
-    /// requests in place of a release.
-    /// </remarks>
-    private static float[] SuspendedAmplitude(float[] amplitude, int sampleCount, long noteOffSample)
-    {
-        var level = amplitude.Length > 0 ? amplitude[0] : 0f;
-        var result = new float[sampleCount];
-
-        var flat = (int)Math.Clamp(noteOffSample + 128, 0, sampleCount);
-        Array.Fill(result, level, 0, flat);
-
-        for (var i = flat; i < sampleCount && i < noteOffSample + 128 + 192; i++)
-        {
-            result[i] = level * (float)(1.0 - ((i - noteOffSample - 128) / 192.0));
-        }
-
-        return result;
-    }
 }

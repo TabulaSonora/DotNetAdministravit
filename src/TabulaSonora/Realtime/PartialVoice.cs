@@ -144,10 +144,12 @@ internal sealed class PartialVoice
 
     /// <summary>Starts the release.</summary>
     /// <remarks>
-    /// A drum ignores note-off: its ring is a fixed length set at note-on. A one-shot voice (envelope
-    /// hold that never expires) takes the engine's fast fade instead of a release, and a voice whose
-    /// delayed start has not fired yet is killed without ever sounding — both straight from the
-    /// armed-clock note-off handling in the original.
+    /// A drum ignores note-off: its ring is a fixed length set at note-on. A key-off layer (envelope
+    /// hold that never expires on its own) <em>fires</em> here instead of releasing: wave and
+    /// envelopes start fresh on the next control tick with no release pending, the note-off having
+    /// been consumed arming the fire — verified against the DLL, whose armed voice keeps its wave
+    /// read position frozen until this moment. A voice whose delayed start has not fired yet is
+    /// killed without ever sounding.
     /// </remarks>
     public void NoteOff()
     {
@@ -158,7 +160,7 @@ internal sealed class PartialVoice
 
         if (_holdSamples == EnvelopeMachine.HoldForever)
         {
-            Choke();
+            _holdSamples = SegmentEnvelope.DeferToControlTick(_sample, ToneGenerator.ControlBlock);
             return;
         }
 
@@ -249,17 +251,20 @@ internal sealed class PartialVoice
             return;
         }
 
+        if (_sample < _holdSamples)
+        {
+            // Armed: the engine renders nothing for a held voice. The wave's read position and every
+            // control value stay frozen (measured — the DLL's sampler position sits still until the
+            // clock fires), so the whole voice is simply time-shifted by the hold.
+            destination.Clear();
+            _sample += destination.Length;
+            return;
+        }
+
         if (_sample % ToneGenerator.ControlBlock == 0)
         {
-            // While the hold clock runs, the control values stay where note-on left them: no LFO
-            // ticks, no pitch-envelope steps. The run-tick counter only starts once it fires, which
-            // keeps the "first tick carries no LFO" alignment relative to the envelope start.
-            var holding = _sample < _holdSamples;
-            Control(bendMilliSemitones, modWheelDepth, first: !holding && _controlTick == 0, holding);
-            if (!holding)
-            {
-                _controlTick++;
-            }
+            Control(bendMilliSemitones, modWheelDepth, first: _controlTick == 0);
+            _controlTick++;
         }
         else
         {
@@ -316,16 +321,16 @@ internal sealed class PartialVoice
         return into < ChokeFade ? 1.0 - (into / (double)ChokeFade) : 0.0;
     }
 
-    private void Control(double bendMilliSemitones, double modWheelDepth, bool first, bool holding)
+    private void Control(double bendMilliSemitones, double modWheelDepth, bool first)
     {
         var released = _noteOff >= 0 && _sample >= _noteOff;
 
         // The first control tick carries no LFO: the LFO object is created after that tick's update,
         // so nothing has been applied yet. Aligning to that is what makes the modulation line up with
-        // the engine's own trace. A holding voice carries none either — its LFOs have not started.
+        // the engine's own trace.
         double lfoPitch = 0, lfoTvf = 0, lfoTva = 0;
 
-        if (!first && !holding)
+        if (!first)
         {
             _lfo1?.Tick();
             _lfo2?.Tick();
@@ -346,10 +351,7 @@ internal sealed class PartialVoice
             }
         }
 
-        // Held: the pitch envelope reads at its start level without stepping.
-        var envelope = holding
-            ? _pitchEnvelope?.Level ?? 0.0
-            : _pitchEnvelope?.Tick(released) ?? 0.0;
+        var envelope = _pitchEnvelope?.Tick(released) ?? 0.0;
         _pitchModulation = envelope + lfoPitch;
         _ratio = Ratio(bendMilliSemitones);
 
@@ -450,8 +452,8 @@ internal readonly record struct VoiceSetup
     public long AutoReleaseSamples { get; init; }
 
     /// <summary>
-    /// Samples the envelope machine stays held at its note-on state — zero normally, a delay for a
-    /// late-starting layer, or <see cref="EnvelopeMachine.HoldForever"/> for a one-shot.
+    /// Samples the voice stays armed and silent — zero normally, a delay for a late-starting layer,
+    /// or <see cref="EnvelopeMachine.HoldForever"/> for a key-off layer that fires at note-off.
     /// </summary>
     public long EnvelopeHoldSamples { get; init; }
 }
