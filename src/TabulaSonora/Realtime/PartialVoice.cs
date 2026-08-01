@@ -57,6 +57,7 @@ internal sealed class PartialVoice
     private long _chokeAt = -1;
     private long _autoRelease = -1;
     private long _controlTick;
+    private long _holdSamples;
 
     private double _ratio = 1.0;
     private double _tremolo = 1.0;
@@ -107,6 +108,7 @@ internal sealed class PartialVoice
         _chokeAt = -1;
         _controlTick = 0;
         _autoRelease = setup.AutoReleaseSamples;
+        _holdSamples = setup.EnvelopeHoldSamples;
         _isDrum = setup.IsDrum;
         _levelGain = setup.LevelGain;
         _pan = setup.Pan;
@@ -141,13 +143,32 @@ internal sealed class PartialVoice
     }
 
     /// <summary>Starts the release.</summary>
-    /// <remarks>A drum ignores note-off: its ring is a fixed length set at note-on.</remarks>
+    /// <remarks>
+    /// A drum ignores note-off: its ring is a fixed length set at note-on. A one-shot voice (envelope
+    /// hold that never expires) takes the engine's fast fade instead of a release, and a voice whose
+    /// delayed start has not fired yet is killed without ever sounding — both straight from the
+    /// armed-clock note-off handling in the original.
+    /// </remarks>
     public void NoteOff()
     {
-        if (!_isDrum)
+        if (_isDrum)
         {
-            Release();
+            return;
         }
+
+        if (_holdSamples == EnvelopeMachine.HoldForever)
+        {
+            Choke();
+            return;
+        }
+
+        if (_sample < _holdSamples)
+        {
+            Kill();
+            return;
+        }
+
+        Release();
     }
 
     private void Release()
@@ -159,10 +180,19 @@ internal sealed class PartialVoice
 
         // Deferred to the tick the engine would act on, so the pitch envelope — which reads this flag,
         // and only from the control tick — releases on the same one as the amplitude and cutoff.
+        // The envelopes themselves run on held time, so a delayed start shifts their note-off with it.
         _noteOff = SegmentEnvelope.DeferToControlTick(_sample, ToneGenerator.ControlBlock);
-        _amplitude?.NoteOff(_sample);
-        _cutoff?.NoteOff(_sample);
+        _amplitude?.NoteOff(EnvelopeSample(_sample));
+        _cutoff?.NoteOff(EnvelopeSample(_sample));
     }
+
+    /// <summary>Maps an absolute sample index onto the envelopes' own time base.</summary>
+    /// <remarks>
+    /// The hold is a whole number of control ticks, so the mapping keeps the envelope clock on the
+    /// same 320-sample grid the voice runs on.
+    /// </remarks>
+    private long EnvelopeSample(long sample) =>
+        _holdSamples == 0 ? sample : Math.Max(0, sample - _holdSamples);
 
     /// <summary>
     /// Cuts the voice short with the engine's fast fade.
@@ -221,8 +251,15 @@ internal sealed class PartialVoice
 
         if (_sample % ToneGenerator.ControlBlock == 0)
         {
-            Control(bendMilliSemitones, modWheelDepth, first: _controlTick == 0);
-            _controlTick++;
+            // While the hold clock runs, the control values stay where note-on left them: no LFO
+            // ticks, no pitch-envelope steps. The run-tick counter only starts once it fires, which
+            // keeps the "first tick carries no LFO" alignment relative to the envelope start.
+            var holding = _sample < _holdSamples;
+            Control(bendMilliSemitones, modWheelDepth, first: !holding && _controlTick == 0, holding);
+            if (!holding)
+            {
+                _controlTick++;
+            }
         }
         else
         {
@@ -241,7 +278,7 @@ internal sealed class PartialVoice
                 value = (float)_filter.Process(value, _frequency, _damping, _tap);
             }
 
-            var gain = (amplitude?.ValueAt(_sample) ?? 0.0) * _tremolo;
+            var gain = (amplitude?.ValueAt(EnvelopeSample(_sample)) ?? 0.0) * _tremolo;
 
             if (_chokeAt >= 0)
             {
@@ -261,7 +298,7 @@ internal sealed class PartialVoice
         }
 
         if (_reader.Finished
-            || (amplitude?.IsFinished(_sample) ?? true)
+            || (amplitude?.IsFinished(EnvelopeSample(_sample)) ?? true)
             || (_chokeAt >= 0 && _sample - _chokeAt >= ChokeHold + ChokeFade))
         {
             Kill();
@@ -279,16 +316,16 @@ internal sealed class PartialVoice
         return into < ChokeFade ? 1.0 - (into / (double)ChokeFade) : 0.0;
     }
 
-    private void Control(double bendMilliSemitones, double modWheelDepth, bool first)
+    private void Control(double bendMilliSemitones, double modWheelDepth, bool first, bool holding)
     {
         var released = _noteOff >= 0 && _sample >= _noteOff;
 
         // The first control tick carries no LFO: the LFO object is created after that tick's update,
         // so nothing has been applied yet. Aligning to that is what makes the modulation line up with
-        // the engine's own trace.
+        // the engine's own trace. A holding voice carries none either — its LFOs have not started.
         double lfoPitch = 0, lfoTvf = 0, lfoTva = 0;
 
-        if (!first)
+        if (!first && !holding)
         {
             _lfo1?.Tick();
             _lfo2?.Tick();
@@ -309,7 +346,10 @@ internal sealed class PartialVoice
             }
         }
 
-        var envelope = _pitchEnvelope?.Tick(released) ?? 0.0;
+        // Held: the pitch envelope reads at its start level without stepping.
+        var envelope = holding
+            ? _pitchEnvelope?.Level ?? 0.0
+            : _pitchEnvelope?.Tick(released) ?? 0.0;
         _pitchModulation = envelope + lfoPitch;
         _ratio = Ratio(bendMilliSemitones);
 
@@ -325,7 +365,7 @@ internal sealed class PartialVoice
             var total = 0.0;
             for (var n = 0; n < ToneGenerator.ControlBlock; n++)
             {
-                total += Math.Clamp(_cutoffBase + cutoff.ValueAt(_sample + n) + lfoTvf, 0, 0x7FFF);
+                total += Math.Clamp(_cutoffBase + cutoff.ValueAt(EnvelopeSample(_sample + n)) + lfoTvf, 0, 0x7FFF);
             }
 
             var units = _tvf.CutoffUnits(total / ToneGenerator.ControlBlock, _resonanceByte);
@@ -408,4 +448,10 @@ internal readonly record struct VoiceSetup
 
     /// <summary>Sample at which a drum's ring is released, or −1.</summary>
     public long AutoReleaseSamples { get; init; }
+
+    /// <summary>
+    /// Samples the envelope machine stays held at its note-on state — zero normally, a delay for a
+    /// late-starting layer, or <see cref="EnvelopeMachine.HoldForever"/> for a one-shot.
+    /// </summary>
+    public long EnvelopeHoldSamples { get; init; }
 }

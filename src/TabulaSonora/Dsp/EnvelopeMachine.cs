@@ -1,3 +1,4 @@
+using TabulaSonora.Patches;
 using TabulaSonora.Rom;
 
 namespace TabulaSonora.Dsp;
@@ -215,4 +216,55 @@ public sealed class EnvelopeMachine
     /// wrap rather than saturate.
     /// </remarks>
     public static int Shift8(int value) => (short)(value << 2) >> 8;
+
+    /// <summary>A hold that never expires: the envelope machine stays at its note-on state.</summary>
+    public const long HoldForever = long.MaxValue;
+
+    /// <summary>
+    /// How long a partial's envelope machine stays held at its note-on state, in samples.
+    /// </summary>
+    /// <param name="partial">The partial's parameter block.</param>
+    /// <param name="velocity">MIDI velocity.</param>
+    /// <returns>
+    /// Zero for a normal partial; a sample count for a delayed start; <see cref="HoldForever"/> for a
+    /// one-shot.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Partial block byte 0x00 arms a one-shot clock at note-on. While it runs, none of the voice's
+    /// envelopes or LFOs advance — every control value stays where the note-on compute left it, which
+    /// for an ordinary attack envelope is silence. When it fires, the machine simply starts. It fires
+    /// once; it is a delayed start, not a tremolo (the tremolo tones carry it as 0xff and keep their
+    /// tremolo in the sample).
+    /// </para>
+    /// <para>
+    /// The low seven bits index <c>g_rate_curve</c> for the delay in milliseconds, velocity-scaled
+    /// through byte 0x01 and divided by 10 into control ticks — Piano+Choir1's choir layer enters 3
+    /// ticks late, Puff Organ's puff 5. Values 1 and 2 compute to zero ticks and never arm. The full
+    /// index also adds two 0x40-neutral part-modify bytes (part+0x45b/+0x44b), not modelled here.
+    /// <c>0xff</c> is the one-shot form: held for the voice's whole life, so the sample plays at its
+    /// note-on control levels (the <c>.o</c> variation tones), and note-off takes the fast fade
+    /// instead of the release. A released voice whose delay has not yet fired is killed without ever
+    /// sounding.
+    /// </para>
+    /// </remarks>
+    public long HoldSamples(PartialParameters partial, int velocity)
+    {
+        var clock = partial.Raw[0x00];
+        if (clock == 0)
+        {
+            return 0;
+        }
+
+        if (clock == 0xFF)
+        {
+            return HoldForever;
+        }
+
+        var index = clock & 0x7F;
+        var scale = LevelScale(Math.Clamp(velocity, 0, 127), partial.Raw[0x01]);
+        var ticks = (((scale * _rateCurve[Math.Min(index, 0x7F)]) >> 8) & 0xFFFF) / 10;
+
+        return ticks * 320L;
+    }
 }
