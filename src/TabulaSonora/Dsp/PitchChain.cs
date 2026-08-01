@@ -37,6 +37,7 @@ public sealed class PitchEnvelopeRunner
     private readonly int[] _rates;
     private readonly int _release;
     private readonly int _releaseRate;
+    private readonly bool _ignoreNoteOff;
 
     private double _segmentStart;
     private double _level;
@@ -46,11 +47,18 @@ public sealed class PitchEnvelopeRunner
 
     /// <summary>Creates a runner over a decoded envelope.</summary>
     /// <param name="envelope">The decoded targets and timings.</param>
-    public PitchEnvelopeRunner(PitchEnvelope envelope)
+    /// <param name="ignoreNoteOff">Whether the envelope runs through note-off (one-shot mode).</param>
+    /// <remarks>
+    /// One-shot mode is bit 7 of partial block byte 0x00: the engine's note-off handler skips
+    /// engaging the pitch release while the envelope machine still runs. It is what the <c>.o</c>
+    /// variation tones (Harpsi.o, Nylon Gt.o, Organ o, …) use.
+    /// </remarks>
+    public PitchEnvelopeRunner(PitchEnvelope envelope, bool ignoreNoteOff = false)
     {
         _targets = envelope.Targets;
         _release = envelope.Release;
         _releaseRate = PitchChain.SegmentRateWord(envelope.ReleaseMs);
+        _ignoreNoteOff = ignoreNoteOff;
 
         _rates = new int[envelope.Times.Length];
         for (var i = 0; i < _rates.Length; i++)
@@ -61,6 +69,28 @@ public sealed class PitchEnvelopeRunner
         _segmentStart = envelope.Start;
         _level = envelope.Start;
     }
+
+    private PitchEnvelopeRunner(double level)
+    {
+        _targets = [];
+        _rates = [];
+        _segmentStart = level;
+        _level = level;
+        _segment = int.MaxValue;
+        _ignoreNoteOff = true;
+    }
+
+    /// <summary>
+    /// A runner that holds one level forever.
+    /// </summary>
+    /// <param name="level">The offset in milli-semitones.</param>
+    /// <returns>The runner.</returns>
+    /// <remarks>
+    /// A partial with random start jitter but a disabled envelope still gets the jitter: the engine
+    /// writes the jittered start level and a zero rate word, so the level is never stepped — a
+    /// per-note constant random detune.
+    /// </remarks>
+    public static PitchEnvelopeRunner Constant(double level) => new(level);
 
     /// <summary>The offset in milli-semitones after the last tick.</summary>
     public double Level => _level;
@@ -73,7 +103,7 @@ public sealed class PitchEnvelopeRunner
         double target;
         int rate;
 
-        if (released && !_released)
+        if (released && !_released && !_ignoreNoteOff)
         {
             _released = true;
             _segmentStart = _level;
@@ -138,6 +168,7 @@ public sealed class PitchChain
         [0, 3276, 6553, 9830, 13107, 16383, 19660, 22937, 26214, 29491, 32767];
 
     private readonly EnvelopeMachine _envelope;
+    private readonly EngineNoise _noise = new();
     private readonly byte[] _pitchBias;
     private readonly ushort[] _depthVelocitySensitivity;
     private readonly byte[] _rateKeyFollow0;
@@ -384,6 +415,29 @@ public sealed class PitchChain
     }
 
     /// <summary>
+    /// The random start-pitch jitter for one note-on, in milli-semitones.
+    /// </summary>
+    /// <param name="depth">Partial block byte 0x1a.</param>
+    /// <param name="draw">One draw from the engine's noise generator.</param>
+    /// <returns>The offset, roughly −10 to +5 × <paramref name="depth"/> milli-semitones.</returns>
+    /// <remarks>
+    /// Bit 14 of the draw picks the sign. The magnitude slice is asymmetric — 7 bits on the
+    /// positive side, 8 on the negative — so the range is about [−10·d, +5·d], and that asymmetry
+    /// is the hardware's, not an artefact. The engine applies this to the envelope's start level at
+    /// every note-on, even when the envelope itself is disabled. 19 partials carry a non-zero depth
+    /// (5 or 10 — the "analog feel" detune on layered bass/brass patches).
+    /// </remarks>
+    public static int StartJitterMilliSemitones(int depth, ushort draw)
+    {
+        if ((short)(draw << 1) >= 0)
+        {
+            return ((((draw & 0x7FFF) >> 7) * depth) + 0x80 >> 8) * 10;
+        }
+
+        return ((((ushort)(draw * -2) >> 8) * depth) + 0x80 >> 8) * -10;
+    }
+
+    /// <summary>
     /// Creates a runner for a partial's pitch envelope.
     /// </summary>
     /// <param name="partial">The partial's parameter block.</param>
@@ -391,21 +445,41 @@ public sealed class PitchChain
     /// <param name="velocity">MIDI velocity.</param>
     /// <returns>The runner, or <see langword="null"/> when the envelope does nothing.</returns>
     /// <remarks>
+    /// <para>
     /// An envelope whose start, four targets and release are all zero is not merely flat — it is
     /// absent, and skipping it saves the pitch chain a per-tick update on most patches.
+    /// </para>
+    /// <para>
+    /// A non-zero block byte 0x1a draws start jitter here, one draw per partial voice, matching the
+    /// engine (which skips the draw entirely when the byte is zero, so unaffected patches consume
+    /// nothing from the generator). The engine clamps the jittered <em>absolute</em> start level at
+    /// zero; this model relies on the downstream pitch clamp instead, which only differs when
+    /// base + start is already near zero — no jittered partial is (their bases sit tens of
+    /// semitones above the floor and the jitter is at most ±100 milli-semitones).
+    /// </para>
     /// </remarks>
     public PitchEnvelopeRunner? CreateEnvelopeRunner(PartialParameters partial, int key, int velocity)
     {
+        var raw = partial.Raw;
+        var jitterDepth = raw[0x1A];
+        var jitter = jitterDepth != 0 ? StartJitterMilliSemitones(jitterDepth, _noise.Next()) : 0;
+        var oneShot = (raw[0x00] & 0x80) != 0;
+
         var envelope = EnvelopeOffsets(partial, key, velocity);
         if (envelope is null)
         {
-            return null;
+            return jitter == 0 ? null : PitchEnvelopeRunner.Constant(jitter);
+        }
+
+        if (jitter != 0)
+        {
+            envelope = envelope.Value with { Start = envelope.Value.Start + jitter };
         }
 
         var (start, targets, release, _, _) = envelope.Value;
         return start == 0 && Array.TrueForAll(targets, t => t == 0) && release == 0
             ? null
-            : new PitchEnvelopeRunner(envelope.Value);
+            : new PitchEnvelopeRunner(envelope.Value, oneShot);
     }
 
     /// <summary>
