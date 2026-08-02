@@ -56,6 +56,9 @@ public sealed class TableSet
         public const string LfoCents = "lfo_cents_2690.bin";
         public const string LfoDelay = "lfo_delay_a2590.bin";
         public const string LfoRate = "lfo_rate_2790.bin";
+
+        /// <summary>Portamento glide step per control tick, by CC#5 time byte.</summary>
+        public const string PortamentoStep = "porta_step_7800.bin";
         public const string LfoWave = "lfo_wave_1740.bin";
         public const string LfoWaveBank = "lfo_wavebank_a17f0.bin";
         public const string LfoWaveMap = "lfo_wavemap_87ae0.bin";
@@ -114,6 +117,7 @@ public sealed class TableSet
         LfoCents = U16(raw[Names.LfoCents]);
         LfoDelay = U16(raw[Names.LfoDelay]);
         LfoRate = U16(raw[Names.LfoRate]);
+        PortamentoStep = U16(raw[Names.PortamentoStep]);
         LfoWave = raw[Names.LfoWave];
         LfoWaveBank = S16(raw[Names.LfoWaveBank]);
         LfoWaveMap = raw[Names.LfoWaveMap];
@@ -309,6 +313,16 @@ public sealed class TableSet
 
     /// <summary><c>g_lfo_rate_tbl</c> — 128 entries; LFO1 rate byte to 16-bit phase increment.</summary>
     public ushort[] LfoRate { get; }
+
+    /// <summary>
+    /// <c>g_porta_step</c> — 128 entries; portamento glide in milli-semitones per control tick,
+    /// indexed by the CC#5 time byte.
+    /// </summary>
+    /// <remarks>
+    /// The glide is linear in pitch, not in frequency: 0 is instant, 64 crosses an octave in about
+    /// half a second, and 127 takes two minutes over the same octave.
+    /// </remarks>
+    public ushort[] PortamentoStep { get; }
 
     /// <summary><c>g_lfo_wave</c> — the half-sine LFO waveform used by selector 0.</summary>
     public byte[] LfoWave { get; }

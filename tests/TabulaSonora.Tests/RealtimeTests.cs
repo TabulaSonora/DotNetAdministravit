@@ -330,6 +330,110 @@ public class RealtimeTests
         Assert.Equal(0, generator.ActiveVoices);
     }
 
+    [SkippableFact]
+    public void PortamentoGlidesFromTheLastKeyAndArrivesInTune()
+    {
+        using var rom = RomImage.Open(TestData.RequireSccore(), RomVerification.Quick);
+
+        // A sustaining lead, so what is measured is the glide and not a decay.
+        static ToneGenerator Play(RomImage rom, bool portamento, int time)
+        {
+            var generator = ToneGenerator.Create(rom, new ToneGeneratorOptions { Reverb = false, Chorus = false });
+            generator.SendChannel(0xC0, 80, 0);
+            if (portamento)
+            {
+                generator.SendChannel(0xB0, 5, time);
+                generator.SendChannel(0xB0, 65, 127);
+                generator.SendChannel(0xB0, 126, 1);   // CC65 only arms when the part is quiet
+            }
+
+            generator.SendChannel(0x90, 48, 100);
+            Render(generator, Rate / 4);
+            generator.SendChannel(0x80, 48, 0);
+            generator.SendChannel(0x90, 72, 100);
+            return generator;
+        }
+
+        // Time 64 crosses an octave in about half a second, so two octaves is still well under way
+        // a tenth of a second in, and comfortably over by the end of a second.
+        var gliding = Play(rom, portamento: true, time: 64);
+        var early = Render(gliding, Rate / 10);
+        var settled = Render(gliding, Rate, skipSeconds: 1.0);
+
+        var plain = Play(rom, portamento: false, time: 0);
+        var plainEarly = Render(plain, Rate / 10);
+        var plainSettled = Render(plain, Rate, skipSeconds: 1.0);
+
+        // Early on the glide is still below the target, so its zero-crossing rate is lower.
+        Assert.True(Crossings(early) < Crossings(plainEarly) * 0.9,
+            $"Gliding note started at {Crossings(early)} crossings against {Crossings(plainEarly)}.");
+
+        // By the end it has arrived: the two agree closely.
+        var ratio = Crossings(settled) / (double)Math.Max(1, Crossings(plainSettled));
+        Assert.True(ratio is > 0.95 and < 1.05, $"Glide settled at {ratio:F3} of the target pitch.");
+    }
+
+    [SkippableFact]
+    public void PortamentoDoesNotGlideOverARingingNote()
+    {
+        using var rom = RomImage.Open(TestData.RequireSccore(), RomVerification.Quick);
+        var generator = ToneGenerator.Create(rom, new ToneGeneratorOptions { Reverb = false, Chorus = false });
+        generator.SendChannel(0xC0, 48, 0);
+        generator.SendChannel(0xB0, 5, 64);
+        generator.SendChannel(0xB0, 65, 127);
+
+        // Poly, with the first note still sounding: the engine does not arm the glide here, and
+        // measuring the DLL is what settled it.
+        generator.SendChannel(0x90, 48, 100);
+        Render(generator, Rate / 4);
+        generator.SendChannel(0x90, 72, 100);
+        var overlapped = Crossings(Render(generator, Rate / 10));
+
+        var plain = ToneGenerator.Create(rom, new ToneGeneratorOptions { Reverb = false, Chorus = false });
+        plain.SendChannel(0xC0, 48, 0);
+        plain.SendChannel(0x90, 48, 100);
+        Render(plain, Rate / 4);
+        plain.SendChannel(0x90, 72, 100);
+        var reference = Crossings(Render(plain, Rate / 10));
+
+        Assert.Equal(reference, overlapped);
+    }
+
+    [SkippableFact]
+    public void PortamentoControlGlidesOneNoteOnly()
+    {
+        using var rom = RomImage.Open(TestData.RequireSccore(), RomVerification.Quick);
+        var generator = ToneGenerator.Create(rom, new ToneGeneratorOptions { Reverb = false, Chorus = false });
+        generator.SendChannel(0xC0, 80, 0);
+        generator.SendChannel(0xB0, 5, 64);
+
+        // CC#84 names the source key without turning portamento on, and is consumed by one note.
+        generator.SendChannel(0xB0, 84, 48);
+        generator.SendChannel(0x90, 72, 100);
+        var glided = Crossings(Render(generator, Rate / 10));
+
+        generator.SendChannel(0x80, 72, 0);
+        generator.SendChannel(0x90, 72, 100);
+        var second = Crossings(Render(generator, Rate / 10));
+
+        Assert.True(glided < second * 0.9,
+            $"The controlled glide started at {glided} crossings, the next note at {second}.");
+    }
+
+    private static int Crossings(float[] samples)
+    {
+        var count = 0;
+        for (var i = 1; i < samples.Length; i++)
+        {
+            if ((samples[i - 1] < 0f) != (samples[i] < 0f))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
     private static float[] Render(ToneGenerator generator, int frames, double skipSeconds = 0.0)
     {
         if (skipSeconds > 0)

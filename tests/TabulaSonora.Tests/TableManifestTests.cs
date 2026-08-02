@@ -39,9 +39,9 @@ public class TableManifestTests
     }
 
     [Fact]
-    public void DescribesFortyEightCachedTables()
+    public void DescribesFortyNineCachedTables()
     {
-        Assert.Equal(48, Manifest.CachedTables.Count);
+        Assert.Equal(49, Manifest.CachedTables.Count);
         Assert.All(Manifest.CachedTables, entry =>
         {
             Assert.True(entry.FileOffset > 0, $"{entry.Name} has no file offset.");

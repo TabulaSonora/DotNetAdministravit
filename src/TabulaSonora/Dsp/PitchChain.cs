@@ -187,6 +187,7 @@ public sealed class PitchChain
 
     private readonly EnvelopeMachine _envelope;
     private readonly EngineNoise _noise = new();
+    private readonly ushort[] _portamentoStep;
     private readonly byte[] _pitchBias;
     private readonly ushort[] _depthVelocitySensitivity;
     private readonly byte[] _rateKeyFollow0;
@@ -210,6 +211,7 @@ public sealed class PitchChain
         _rateKeyFollow1 = tables.KfPitchRate1;
         _keyFollow = tables.KfPitch;
         _rateCurve = tables.RateCurve;
+        _portamentoStep = tables.PortamentoStep;
 
         // The depth velocity-sensitivity slope is a signed-16 view of the first 0x80 entries of the
         // pitch-envelope export.
@@ -324,6 +326,27 @@ public sealed class PitchChain
         key = Math.Clamp(key, 0, 0x7F);
         return (key * 1000) + weight + ((partial.Raw[0x11] - 0x40) * 10);
     }
+
+    /// <summary>
+    /// The portamento glide step for a time byte, in milli-semitones per control tick.
+    /// </summary>
+    /// <param name="time">CC#5 portamento time.</param>
+    /// <returns>The step; zero never arrives, so a step of at least one always finishes.</returns>
+    public int PortamentoStep(int time) => _portamentoStep[Math.Clamp(time, 0, 0x7F)];
+
+    /// <summary>
+    /// The glide offset a note starts with, in milli-semitones.
+    /// </summary>
+    /// <param name="fromKey">The key being glided from.</param>
+    /// <param name="targetPitch">The note's own absolute pitch.</param>
+    /// <returns>The offset, which decays to zero as the glide completes.</returns>
+    /// <remarks>
+    /// The engine takes the source key at a flat <c>key × 1000</c> rather than running it back
+    /// through the key-follow chain, so a glide always departs from equal temperament and lands on
+    /// whatever the destination partial's own chain produces.
+    /// </remarks>
+    public static int PortamentoOffset(int fromKey, int targetPitch) =>
+        (Math.Clamp(fromKey, 0, 0x7F) * 1000) - targetPitch;
 
     /// <summary>Pitch-bend offset in milli-semitones.</summary>
     /// <param name="bend">14-bit bend value, 8192 centre.</param>

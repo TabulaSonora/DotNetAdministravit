@@ -120,6 +120,29 @@ public sealed class Part
     /// </remarks>
     public List<int> Sustained { get; } = [];
 
+    /// <summary>CC#5 portamento time; indexes the glide-step table.</summary>
+    public int PortamentoTime { get; set; }
+
+    /// <summary>Whether CC#65 portamento is on.</summary>
+    public bool PortamentoOn { get; set; }
+
+    /// <summary>Whether CC#126 mono mode is on, which flushes the part's voices at each note-on.</summary>
+    public bool Mono { get; set; }
+
+    /// <summary>
+    /// CC#84 portamento control: the key the next note glides from, or −1 when unset.
+    /// </summary>
+    /// <remarks>
+    /// One-shot — the engine consumes it at the next note-on and resets the byte to its unset value,
+    /// so it glides exactly one note and does not latch a mode.
+    /// </remarks>
+    public int PortamentoControlKey { get; set; } = -1;
+
+    /// <summary>
+    /// The key the part last sounded, which portamento glides from, or −1 when nothing has played.
+    /// </summary>
+    public int LastKey { get; set; } = -1;
+
     /// <summary>Whether the sostenuto pedal is down. CC#66 is binary — bit 6 only, as the engine reads it.</summary>
     public bool SostenutoDown { get; set; }
 
@@ -165,6 +188,11 @@ public sealed class Part
         DataEntryIsNrpn = false;
         DrumKeys.Reset();
         Sustained.Clear();
+        PortamentoTime = 0;
+        PortamentoOn = false;
+        Mono = false;
+        PortamentoControlKey = -1;
+        LastKey = -1;
         SostenutoDown = false;
         SostenutoCaptured.Clear();
         SostenutoReleased.Clear();

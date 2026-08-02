@@ -56,7 +56,7 @@ public class TableSetTests
         }
 
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
-        Assert.Equal(48, compared);
+        Assert.Equal(49, compared);
     }
 
     [SkippableFact]

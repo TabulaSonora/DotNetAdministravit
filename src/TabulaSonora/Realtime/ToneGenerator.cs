@@ -633,6 +633,12 @@ public sealed class ToneGenerator
 
                 break;
 
+            case 5: part.PortamentoTime = value; break;
+            case 126: part.Mono = true; break;
+            case 127: part.Mono = false; break;
+            case 65: part.PortamentoOn = value >= 0x40; break;
+            case 84: part.PortamentoControlKey = value; break;
+
             case 66:
                 // Binary — the engine reads only bit 6, so there is no half-sostenuto.
                 if (value >= 0x40)
@@ -730,6 +736,19 @@ public sealed class ToneGenerator
         }
     }
 
+    private bool AnyVoiceOn(int channel)
+    {
+        for (var i = 0; i < _slots.Length; i++)
+        {
+            if (_slots[i] is { Finished: false } voice && voice.Channel == channel)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private void StopNote(int channel, int note, int damper = 0)
     {
         for (var i = 0; i < _slots.Length; i++)
@@ -757,6 +776,35 @@ public sealed class ToneGenerator
         {
             return;
         }
+
+        // Mono mode flushes what the part is already sounding, which is also what lets CC#65
+        // portamento engage — see the gate below.
+        if (part.Mono)
+        {
+            for (var i = 0; i < _slots.Length; i++)
+            {
+                if (_slots[i] is { Finished: false } sounding && sounding.Channel == channel)
+                {
+                    sounding.Choke();
+                }
+            }
+        }
+
+        // Portamento. CC#84 names the source key outright, is consumed by this one note, and glides
+        // whatever else the part is doing. CC#65 is the sustained mode, and the engine only arms it
+        // when the part has nothing left sounding — measured against the DLL, a note struck over a
+        // still-ringing one does not glide, while the same pair in mono mode does. A part that has
+        // not played yet has nothing to glide from either way.
+        // Mono short-circuits the check rather than re-reading it after the flush, exactly as the
+        // engine does — the voices it just chased away are still fading, so a fresh count would say
+        // the part is busy.
+        var quiet = part.Mono || !AnyVoiceOn(channel);
+        var glideFrom = part.PortamentoControlKey >= 0 ? part.PortamentoControlKey
+            : part.PortamentoOn && quiet ? part.LastKey
+            : -1;
+        var glideStep = _notes.Pitch.PortamentoStep(part.PortamentoTime);
+        part.PortamentoControlKey = -1;
+        part.LastKey = Math.Clamp(note, 0, 0x7F);
 
         var group = _pool.BeginNoteGroup();
         var sounded = false;
@@ -799,6 +847,11 @@ public sealed class ToneGenerator
                     Lfo2 = lfo2,
                     EnvelopeHoldSamples = _notes.Envelopes.HoldSamples(partial, velocity),
                     HalfDamper = _notes.Directory.HalfDamper(toneNumber),
+                    GlideMilliSemitones = glideFrom < 0
+                        ? 0.0
+                        : PitchChain.PortamentoOffset(
+                            glideFrom, _notes.Pitch.BasePitchMilliSemitones(partial, note, partial.KeyCenter)),
+                    GlideStep = glideStep,
                     BasePitch = _notes.Pitch.BasePitchMilliSemitones(partial, note, partial.KeyCenter),
                     Pan = partial.Pan,
                     PanFollowsPart = true,

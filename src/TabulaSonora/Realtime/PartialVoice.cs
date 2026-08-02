@@ -59,6 +59,8 @@ internal sealed class PartialVoice
     private long _controlTick;
     private long _holdSamples;
     private bool _halfDamper;
+    private double _glide;
+    private int _glideStep;
 
     private double _ratio = 1.0;
     private double _tremolo = 1.0;
@@ -111,6 +113,8 @@ internal sealed class PartialVoice
         _autoRelease = setup.AutoReleaseSamples;
         _holdSamples = setup.EnvelopeHoldSamples;
         _halfDamper = setup.HalfDamper;
+        _glide = setup.GlideMilliSemitones;
+        _glideStep = setup.GlideStep;
         _isDrum = setup.IsDrum;
         _levelGain = setup.LevelGain;
         _pan = setup.Pan;
@@ -364,7 +368,18 @@ internal sealed class PartialVoice
         }
 
         var envelope = _pitchEnvelope?.Tick(released) ?? 0.0;
-        _pitchModulation = envelope + lfoPitch;
+
+        // Portamento: a fixed number of milli-semitones per control tick, straight toward zero, so
+        // the glide is linear in pitch rather than in frequency. It is summed into the pitch inside
+        // the same clamp as everything else, which is why it lives here and not in the base pitch.
+        if (_glide != 0.0)
+        {
+            _glide = _glide < 0.0
+                ? Math.Min(0.0, _glide + _glideStep)
+                : Math.Max(0.0, _glide - _glideStep);
+        }
+
+        _pitchModulation = envelope + lfoPitch + _glide;
         _ratio = Ratio(bendMilliSemitones);
 
         // Amplitude modulation folds in as a fraction of 0x7f00, clamped first.
@@ -471,4 +486,16 @@ internal readonly record struct VoiceSetup
 
     /// <summary>Whether the tone responds to half-damper (tone header byte 0x0d bit 2).</summary>
     public bool HalfDamper { get; init; }
+
+    /// <summary>
+    /// Portamento glide offset at note-on, in milli-semitones; zero for no glide.
+    /// </summary>
+    /// <remarks>
+    /// Negative glides up to the note, positive glides down to it. The voice sounds at
+    /// <c>pitch + glide</c> and the offset walks to zero at <see cref="GlideStep"/> per tick.
+    /// </remarks>
+    public double GlideMilliSemitones { get; init; }
+
+    /// <summary>Milli-semitones the glide closes per control tick.</summary>
+    public int GlideStep { get; init; }
 }
