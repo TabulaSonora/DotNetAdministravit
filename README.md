@@ -1,5 +1,9 @@
 # Tabula Sonora .NET
 
+> **Archived.** [NativeTS](https://github.com/TabulaSonora/NativeTS), the C++ port, is the reference
+> reimplementation now — it renders byte-for-byte identically to this engine, and faster. This
+> repository stays as the oracle those porting phases were verified against; nothing here moves.
+
 A standalone C# implementation of the Roland Sound Canvas VA synth voice, built to the specification
 in [TabulaSonora](https://github.com/TabulaSonora/spec). It reads the wave ROM and synth tables out of
 `SCCore.dll` **as a data file** — the DLL is never loaded as code — so the engine is fully managed.
