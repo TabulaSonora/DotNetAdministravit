@@ -102,3 +102,35 @@ public class HalfDamperTests
         Assert.Equal(134, halfTicks);
     }
 }
+
+/// <summary>
+/// Drum coarse pitch: the plane supplies the key, the tone's key-follow decides what a step of it
+/// is worth. Pinned to pitches measured off the DLL under Wine.
+/// </summary>
+public class DrumKeyFollowTests
+{
+    [SkippableFact]
+    public void APlaneStepIsWorthWhateverTheTonesKeyFollowSays()
+    {
+        var tables = TableSet.FromCacheDirectory(TestData.RequireTables());
+        var directory = new PatchDirectory(tables);
+
+        // Elec. Snare (the Electronic kit's note 38) follows at 100%: a whole semitone per unit.
+        var full = directory.GetPartialBySlot(1840, 0);
+        Assert.Equal(0x4A, full.Raw[0x13]);
+        Assert.Equal(60_000, PitchChain.DrumPitchMilliSemitones(full, 60));
+        Assert.Equal(72_000, PitchChain.DrumPitchMilliSemitones(full, 72));
+
+        // Std.1 Snare1 (the SC-88 Standard kit's note 38) follows at 50%: half a semitone per unit.
+        var half = directory.GetPartialBySlot(1821, 0);
+        Assert.Equal(0x45, half.Raw[0x13]);
+        Assert.Equal(60_000, PitchChain.DrumPitchMilliSemitones(half, 60));
+        Assert.Equal(66_000, PitchChain.DrumPitchMilliSemitones(half, 72));
+
+        // The neutral plane value sounds the tone at its natural pitch whatever the follow is.
+        foreach (var tone in new[] { 1840, 1821, 1826, 1776 })
+        {
+            Assert.Equal(60_000, PitchChain.DrumPitchMilliSemitones(directory.GetPartialBySlot(tone, 0), 60));
+        }
+    }
+}

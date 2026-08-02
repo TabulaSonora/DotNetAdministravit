@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text.Json;
 using TabulaSonora;
+using TabulaSonora.Dsp;
 using TabulaSonora.Patches;
 using TabulaSonora.Rom;
 
@@ -243,13 +244,19 @@ public class VoiceRenderTests
         var low = renderer.RenderDrumNote(41, 110, ringSeconds: 0.5);
         var high = renderer.RenderDrumNote(43, 110, ringSeconds: 0.5);
 
-        // Notes 41 and 43 share a tone and differ only by the coarse plane, at half strength.
+        // Notes 41 and 43 share a tone and differ only by the coarse plane. What a plane step is
+        // worth is the tone's own key-follow, so this asserts the real chain rather than a constant:
+        // that tone follows at 50%, which is why the two land a whole semitone apart across two
+        // plane units.
         var key41 = renderer.Drums.Key(41);
         var key43 = renderer.Drums.Key(43);
         Assert.Equal(key41.Tone, key43.Tone);
 
-        var ratio = DrumKitTable.CoarsePitchRatio(key43.Pitch) / DrumKitTable.CoarsePitchRatio(key41.Pitch);
-        Assert.Equal(Math.Pow(2.0, (key43.Pitch - key41.Pitch) / 24.0), ratio, 9);
+        var partial = renderer.Directory.GetPartialBySlot(key41.Tone, 0);
+        var low41 = PitchChain.DrumPitchMilliSemitones(partial, key41.Pitch);
+        var high43 = PitchChain.DrumPitchMilliSemitones(partial, key43.Pitch);
+        Assert.Equal(0x45, partial.Raw[0x13]);
+        Assert.Equal((key43.Pitch - key41.Pitch) * 500, high43 - low41);
 
         Assert.NotEmpty(low.Mono);
         Assert.NotEmpty(high.Mono);

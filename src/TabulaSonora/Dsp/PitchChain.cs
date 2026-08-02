@@ -178,6 +178,9 @@ public sealed class PitchChain
     /// <summary>Upper clamp of the pitch accumulator: 127 semitones in milli-semitones.</summary>
     public const int MaxPitchMilliSemitones = 0x1F018;
 
+    /// <summary>The key a drum's coarse-pitch plane pivots around: 60 is its natural pitch.</summary>
+    public const int DrumKeyCentre = 60;
+
     /// <summary>The key-follow scale lookup, giving a clean 0% to 100% ladder in steps of 10%.</summary>
     private static readonly int[] KeyFollowScale =
         [0, 3276, 6553, 9830, 13107, 16383, 19660, 22937, 26214, 29491, 32767];
@@ -291,6 +294,35 @@ public sealed class PitchChain
 
         var row = Math.Clamp((raw[0x13] - 0x40) >> 2, 0, 7);
         return (key * 1000) + weight + _keyFollow[(row * 0x80) + key] + ((raw[0x11] - 0x40) * 10);
+    }
+
+    /// <summary>
+    /// A drum key's absolute pitch in milli-semitones, from its coarse-pitch plane value.
+    /// </summary>
+    /// <param name="partial">The partial's parameter block.</param>
+    /// <param name="coarsePitch">The kit's coarse-pitch byte for this key, NRPN offset included.</param>
+    /// <returns>The pitch.</returns>
+    /// <remarks>
+    /// <para>
+    /// A drum note does not transpose its sample; the coarse-pitch plane supplies the key instead,
+    /// pivoting on <see cref="DrumKeyCentre"/>. What a step of that plane is <em>worth</em> is then
+    /// the tone's own business: it runs through the same <c>block[0x13]</c> key-follow ladder as a
+    /// melodic note, so a 100%-follow tone moves a whole semitone per unit and a 50%-follow tone
+    /// half of one. Modelling it as a fixed half-semitone is right only for the latter — see the
+    /// FINDINGS entry on the drum-pitch NRPN, where the SC-55 kits and the Electronic family come
+    /// out an octave short under that reading.
+    /// </para>
+    /// <para>
+    /// Unlike the melodic chain this omits the <c>g_kf_pitch</c> key-follow curve: the engine gates
+    /// that term off for drums, and the measured pitches are exact multiples of 1000 where the
+    /// curve would have contributed −11 or +3.
+    /// </para>
+    /// </remarks>
+    public static int DrumPitchMilliSemitones(PartialParameters partial, int coarsePitch)
+    {
+        var (key, weight) = KeyFollowKey(partial, coarsePitch, DrumKeyCentre);
+        key = Math.Clamp(key, 0, 0x7F);
+        return (key * 1000) + weight + ((partial.Raw[0x11] - 0x40) * 10);
     }
 
     /// <summary>Pitch-bend offset in milli-semitones.</summary>

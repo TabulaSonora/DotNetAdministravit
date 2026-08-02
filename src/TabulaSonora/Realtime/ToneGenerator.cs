@@ -844,7 +844,6 @@ public sealed class ToneGenerator
             }
         }
 
-        var coarse = DrumKitTable.CoarsePitchRatio(key.Pitch);
         var levelGain = DrumKitTable.LevelGain(key.Level);
         var ring = (long)(_options.DrumRingSeconds * NoteRenderer.DrumRingScale(key) * SampleRate);
         var group = _pool.BeginNoteGroup();
@@ -863,13 +862,9 @@ public sealed class ToneGenerator
             var (amplitude, cutoff, cutoffBase) = Envelopes(key.Tone, partial, 60, velocity, rateKey);
             var (lfo1, lfo2) = _notes.Lfo.CreateRunners(key.Tone, partial);
 
-            // The note does not transpose the sample: the tone sounds at its own root, trimmed by the
-            // partial's transpose and coarse tune, and the kit's coarse-pitch plane scales it.
-            var raw = partial.Raw;
-            var nativeSemitones = descriptor.RootKey
-                + ((1024.0 - descriptor.FineTune) / 1000.0)
-                + (0x40 - raw[0x10])
-                - ((raw[0x11] - 0x40) / 100.0);
+            // The note does not transpose the sample: the kit's coarse-pitch plane supplies the key,
+            // and the tone's own key-follow decides what a step of it is worth.
+            var nativeSemitones = (descriptor.RootKey * 1000.0) + 1024.0 - descriptor.FineTune;
 
             Begin(channel, note, velocity, group, new VoiceSetup
             {
@@ -886,7 +881,8 @@ public sealed class ToneGenerator
                 Lfo2 = lfo2,
                 EnvelopeHoldSamples = _notes.Envelopes.HoldSamples(partial, velocity),
                 IsDrum = true,
-                DrumBaseRatio = Math.Pow(2.0, (60 - nativeSemitones) / 12.0) * coarse,
+                DrumBaseRatio = Math.Pow(
+                    2.0, (PitchChain.DrumPitchMilliSemitones(partial, key.Pitch) - nativeSemitones) / 12000.0),
                 Pan = key.Pan,
                 PanFollowsPart = false,
                 LevelGain = levelGain,

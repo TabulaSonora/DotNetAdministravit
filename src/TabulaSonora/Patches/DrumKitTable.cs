@@ -29,8 +29,9 @@ public readonly record struct DrumKey(int Tone, int Level, int Pitch, int Group,
 /// selects a kit through its own pair of lookups.
 /// </item>
 /// <item>
-/// The note does not transpose the sample. The tone resolves at key 60, and the kit's coarse-pitch
-/// plane is then applied at <em>half</em> strength — see <see cref="CoarsePitchRatio"/>.
+/// The note does not transpose the sample. The kit's coarse-pitch plane supplies the key instead,
+/// pivoting on 60, and the tone's own key-follow decides what a step of it is worth — see
+/// <see cref="Dsp.PitchChain.DrumPitchMilliSemitones"/>.
 /// </item>
 /// </list>
 /// </remarks>
@@ -200,9 +201,13 @@ public sealed class DrumKitTable
     /// <param name="pitch">The key's coarse-pitch byte, 60 being natural.</param>
     /// <returns>The frequency ratio.</returns>
     /// <remarks>
-    /// Applied at <em>half</em> strength — 50 cents per unit, not a whole semitone. Measured against
-    /// the engine: keys sharing a tone (41 and 43, 45 and 47) come out <c>2^(offset/24)</c> apart,
-    /// so +6 gives 1.189× rather than the 1.414× a semitone-per-unit reading would predict.
+    /// <strong>Only correct for a tone that key-follows at 50%</strong>, which is what the SC-88 and
+    /// SC-8820 standard kits use and what this constant was measured from (keys 41 and 43 share a
+    /// tone and come out <c>2^(offset/24)</c> apart). The general rule is per-tone: the SC-55 kits
+    /// and the Electronic family follow at 100% and move a whole semitone per unit, so they come out
+    /// half as far under this reading. The engine paths use
+    /// <see cref="Dsp.PitchChain.DrumPitchMilliSemitones"/>; this remains for callers that want the
+    /// old scalar.
     /// </remarks>
     public static double CoarsePitchRatio(int pitch) => Math.Pow(2.0, (pitch - 60) / 24.0);
 

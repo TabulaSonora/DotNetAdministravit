@@ -12,7 +12,8 @@ namespace TabulaSonora.Patches;
 /// </para>
 /// <para>
 /// <b>The pitch unit is not the kit plane's unit.</b> The kit's coarse-pitch plane runs at 50 cents
-/// per step — see <see cref="DrumKitTable.CoarsePitchRatio"/> — but the NRPN is a whole semitone per
+/// per step — worth a whole semitone on a 100%-follow tone and half of one at 50%, see
+/// <see cref="Dsp.PitchChain.DrumPitchMilliSemitones"/> — but the NRPN is a whole semitone per
 /// step, so the offset is doubled on the way in. Measured against the DLL by sweeping the NRPN over
 /// a tonal key (41, Low Floor Tom, whose fundamental autocorrelates cleanly) and reading the
 /// resulting pitch: entry 70 (+6) moved it +5.77 semitones and entry 76 (+12) moved it +11.48, both

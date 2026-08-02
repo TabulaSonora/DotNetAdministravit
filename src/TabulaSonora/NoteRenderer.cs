@@ -290,7 +290,6 @@ public sealed class NoteRenderer
         }
 
         var tone = _directory.GetTone(key.Tone)!;
-        var coarse = DrumKitTable.CoarsePitchRatio(key.Pitch);
 
         foreach (var sounding in resolved.Partials)
         {
@@ -299,7 +298,7 @@ public sealed class NoteRenderer
             var signal = RenderPartial(
                 key.Tone, partial, descriptor, note: 60, velocity,
                 ring, tailSeconds, sampleCount, pitchAddCurve: null,
-                drumCoarseRatio: coarse,
+                drumCoarsePitch: key.Pitch,
                 envelopeRateKey: EnvelopeRateKey(kitKey, drumPitch));
 
             if (signal is null)
@@ -334,7 +333,7 @@ public sealed class NoteRenderer
         double tailSeconds,
         int sampleCount,
         double[]? pitchAddCurve,
-        double? drumCoarseRatio = null,
+        int? drumCoarsePitch = null,
         double[]? modWheelPerTick = null,
         int? envelopeRateKey = null)
     {
@@ -400,19 +399,15 @@ public sealed class NoteRenderer
 
         var ratios = new double[span];
 
-        if (drumCoarseRatio is { } coarse)
+        if (drumCoarsePitch is { } coarsePitch)
         {
-            // Drums take a different pitch route. The note does not transpose the sample, so there
-            // is no key-follow and no absolute-pitch accumulator to clamp: the tone sounds at its
-            // own root, trimmed by the partial's transpose and coarse tune, and the kit's
-            // coarse-pitch plane scales it.
-            var raw = partial.Raw;
-            var nativeSemitones = descriptor.RootKey
-                + ((1024.0 - descriptor.FineTune) / 1000.0)
-                + (0x40 - raw[0x10])
-                - ((raw[0x11] - 0x40) / 100.0);
-
-            var baseRatio = Math.Pow(2.0, (60 - nativeSemitones) / 12.0) * coarse;
+            // Drums take a different pitch route: the note does not transpose the sample. The kit's
+            // coarse-pitch plane supplies the key instead, and the tone's own key-follow decides
+            // what a step of it is worth -- a whole semitone on a 100%-follow tone, half on a 50%
+            // one. There is no absolute-pitch accumulator to clamp on this path.
+            var nativeSemitones = (descriptor.RootKey * 1000.0) + 1024.0 - descriptor.FineTune;
+            var baseRatio = Math.Pow(
+                2.0, (PitchChain.DrumPitchMilliSemitones(partial, coarsePitch) - nativeSemitones) / 12000.0);
 
             // Both contributions are control-rate -- see the memo note in the melodic branch below.
             var lastModulation = double.NaN;
