@@ -120,6 +120,22 @@ public sealed class Part
     /// </remarks>
     public List<int> Sustained { get; } = [];
 
+    /// <summary>Whether the sostenuto pedal is down. CC#66 is binary — bit 6 only, as the engine reads it.</summary>
+    public bool SostenutoDown { get; set; }
+
+    /// <summary>
+    /// Notes the sostenuto pedal captured — the ones sounding when it went down.
+    /// </summary>
+    /// <remarks>
+    /// The engine keeps these as a 128-bit bitmap at part+0x260 plus a capture flag on each note
+    /// group; a captured note's note-off changes state but defers marking the voices released until
+    /// the pedal lifts.
+    /// </remarks>
+    public List<int> SostenutoCaptured { get; } = [];
+
+    /// <summary>Captured notes whose note-off arrived while the pedal held them.</summary>
+    public List<int> SostenutoReleased { get; } = [];
+
     /// <summary>The combined volume multiplier, 1.0 with everything at 127.</summary>
     public double VolumeScale { get; private set; }
 
@@ -149,6 +165,9 @@ public sealed class Part
         DataEntryIsNrpn = false;
         DrumKeys.Reset();
         Sustained.Clear();
+        SostenutoDown = false;
+        SostenutoCaptured.Clear();
+        SostenutoReleased.Clear();
 
         _volume = SequenceBuilder.DefaultVolume;
         _expression = SequenceBuilder.DefaultExpression;

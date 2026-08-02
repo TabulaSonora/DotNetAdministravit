@@ -304,13 +304,21 @@ public sealed class ToneGenerator
                 // The new strike supersedes a note-off the pedal is still holding for this note.
                 // Without this the pedal's lift releases the note being struck here.
                 part.Sustained.RemoveAll(n => n == data1);
+                part.SostenutoCaptured.RemoveAll(n => n == data1);
+                part.SostenutoReleased.RemoveAll(n => n == data1);
 
                 StartNote(channel, data1, data2);
                 break;
 
             case 0x80:
             case 0x90:
-                if (part.DamperDown)
+                if (part.SostenutoDown && part.SostenutoCaptured.Contains(data1))
+                {
+                    // A captured note's release is deferred until the sostenuto pedal lifts — the
+                    // engine's per-group capture flag gating the released mark.
+                    part.SostenutoReleased.Add(data1);
+                }
+                else if (part.DamperDown)
                 {
                     part.Sustained.Add(data1);
                 }
@@ -625,6 +633,48 @@ public sealed class ToneGenerator
 
                 break;
 
+            case 66:
+                // Binary — the engine reads only bit 6, so there is no half-sostenuto.
+                if (value >= 0x40)
+                {
+                    if (!part.SostenutoDown)
+                    {
+                        part.SostenutoDown = true;
+                        for (var i = 0; i < _slots.Length; i++)
+                        {
+                            if (_slots[i] is { Finished: false, Released: false } voice
+                                && voice.Channel == channel
+                                && !part.SostenutoCaptured.Contains(voice.Note))
+                            {
+                                part.SostenutoCaptured.Add(voice.Note);
+                            }
+                        }
+                    }
+                }
+                else if (part.SostenutoDown)
+                {
+                    part.SostenutoDown = false;
+                    foreach (var note in part.SostenutoReleased)
+                    {
+                        // The deferred release engages through the standard machinery, so it
+                        // composes: a still-down damper keeps holding the note, and a part-lifted
+                        // one scales the release on the half-damper tones.
+                        if (part.DamperDown)
+                        {
+                            part.Sustained.Add(note);
+                        }
+                        else
+                        {
+                            StopNote(channel, note, part.Damper);
+                        }
+                    }
+
+                    part.SostenutoCaptured.Clear();
+                    part.SostenutoReleased.Clear();
+                }
+
+                break;
+
             case 101: part.RpnMsb = value; part.DataEntryIsNrpn = false; break;
             case 100: part.RpnLsb = value; part.DataEntryIsNrpn = false; break;
 
@@ -669,6 +719,9 @@ public sealed class ToneGenerator
                 }
 
                 part.Sustained.Clear();
+                part.SostenutoDown = false;
+                part.SostenutoCaptured.Clear();
+                part.SostenutoReleased.Clear();
                 break;
 
             case 121:

@@ -298,6 +298,38 @@ public class RealtimeTests
         Assert.Equal(0, generator.ActiveVoices);
     }
 
+    [SkippableFact]
+    public void SostenutoHoldsOnlyTheNotesItCaptured()
+    {
+        using var rom = RomImage.Open(TestData.RequireSccore(), RomVerification.Quick);
+        var notes = new NoteRenderer(rom);
+        var generator = new ToneGenerator(notes, new ToneGeneratorOptions { Reverb = false, Chorus = false });
+
+        // Program 48, Strings: it sustains, so anything still sounding is being held, not decaying.
+        generator.SendChannel(0xC0, 48, 0);
+        generator.SendChannel(0x90, 60, 100);
+        Render(generator, Rate / 4);
+        var captured = generator.ActiveVoices;
+
+        generator.SendChannel(0xB0, 66, 127);   // sostenuto down captures note 60 —
+        generator.SendChannel(0x90, 64, 100);   // — but not a note struck after it.
+        Render(generator, Rate / 4);
+
+        generator.SendChannel(0x80, 60, 0);
+        generator.SendChannel(0x80, 64, 0);
+        var held = Rms(Render(generator, Rate * 2, skipSeconds: 1.5));
+
+        // The captured note is still sounding well after both note-offs; the uncaptured one has
+        // taken its release and its voices are gone.
+        Assert.True(held > 1e-3, "The captured note fell silent under the sostenuto pedal.");
+        Assert.Equal(captured, generator.ActiveVoices);
+
+        // Pedal up: the deferred release engages through the standard machinery.
+        generator.SendChannel(0xB0, 66, 0);
+        Render(generator, Rate * 3);
+        Assert.Equal(0, generator.ActiveVoices);
+    }
+
     private static float[] Render(ToneGenerator generator, int frames, double skipSeconds = 0.0)
     {
         if (skipSeconds > 0)
