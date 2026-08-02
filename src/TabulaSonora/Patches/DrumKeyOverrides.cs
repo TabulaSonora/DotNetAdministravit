@@ -13,19 +13,22 @@ namespace TabulaSonora.Patches;
 /// record for that one key, leaving every other key alone.
 /// </para>
 /// <para>
-/// <b>The pitch unit is not the kit plane's unit.</b> The kit's coarse-pitch plane runs at 50 cents
-/// per step — worth a whole semitone on a 100%-follow tone and half of one at 50%, see
-/// <see cref="Dsp.PitchChain.DrumPitchMilliSemitones"/> — but the NRPN is a whole semitone per
-/// step, so the offset is doubled on the way in. Measured against the DLL by sweeping the NRPN over
-/// a tonal key (41, Low Floor Tom, whose fundamental autocorrelates cleanly) and reading the
-/// resulting pitch: entry 70 (+6) moved it +5.77 semitones and entry 76 (+12) moved it +11.48, both
-/// a semitone per step rather than the half-step the plane alone would give.
+/// <b>The offset lands on the plane one-for-one, clamped to 0–0x7F.</b> That is the engine's own
+/// plane write (<c>nrpn_apply</c> case <c>0x18</c>, confirmed by live plane reads: entry +12 moves
+/// a stored plane of 60 to 72 on every map). What a step is then <em>worth</em> is the tone's own
+/// pitch key-follow, applied downstream in
+/// <see cref="Dsp.PitchChain.DrumPitchMilliSemitones"/> — a whole semitone on a 100%-follow tone,
+/// half of one at 50%. The earlier sweep that read "a semitone per step" (key 41, Low Floor Tom:
+/// entry +6 moved it +5.77 semitones, +12 moved it +11.48) was measuring a 100%-follow tone, and
+/// an earlier revision wrongly folded that into a ×2 on the plane itself — which pushed
+/// 100%-follow keys twice as far as the engine does, and unclamped drove them into subsonics.
 /// </para>
 /// <para>
-/// The engine floors the playback rate, but <em>not</em> at any fixed offset: key 41 stops moving
-/// below entry 16 (−48 semitones) while key 55 is still distinct at entry 0 (−64), so the limit is
-/// an absolute rate rather than a pitch offset. That floor is not reproduced here — it was measured
-/// but not located, and no General MIDI kit reaches it through a value a file can send.
+/// The "absolute rate floor" that was measured but never located — key 41 stops moving below
+/// entry 16 while key 55 is still distinct at entry 0 — is this clamp's bottom. Keys with
+/// different kit planes floor at different <em>offsets</em>, which is what made it look like a
+/// rate limit rather than a pitch one: key 41's plane hits zero at a shallower entry than
+/// key 55's plane of 60 does.
 /// </para>
 /// </remarks>
 public sealed class DrumKeyOverrides
@@ -143,17 +146,18 @@ public sealed class DrumKeyOverrides
 
     /// <summary>Layers a latched pair of overrides over a key read from the kit record.</summary>
     /// <param name="key">The key as the kit stores it.</param>
-    /// <param name="pitchOffset">Coarse-pitch offset in NRPN steps, zero for none.</param>
+    /// <param name="pitchOffset">Coarse-pitch offset in kit-plane steps, zero for none.</param>
     /// <param name="pan">Panpot, or <see langword="null"/> for none.</param>
     /// <returns>The key as the part should sound it.</returns>
     /// <remarks>
-    /// The plane is deliberately left unclamped. The engine does not stop at zero — key 55 sits at
-    /// plane 60 and still changes pitch at entry 0, which drives the sum to −68 — so clamping here
-    /// would silently flatten the bottom of the range a file can actually use.
+    /// The offset adds one-for-one and the sum clamps to 0–0x7F, exactly as the engine writes the
+    /// plane. WATRWLD1.MID is the regression this pins: its crash (key 55, entry 24 = −40 steps)
+    /// lands at plane 29 on the SC-55 Standard kit's 100%-follow crash tone — 2.3 octaves down and
+    /// clearly audible — where the doubled, unclamped form fell five octaves and vanished.
     /// </remarks>
     public static DrumKey Apply(DrumKey key, int pitchOffset, int? pan) => key with
     {
-        Pitch = key.Pitch + (2 * pitchOffset),
+        Pitch = Math.Clamp(key.Pitch + pitchOffset, 0, 0x7F),
         Pan = pan ?? key.Pan,
     };
 }

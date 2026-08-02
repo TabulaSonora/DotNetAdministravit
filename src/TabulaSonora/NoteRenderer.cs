@@ -195,7 +195,7 @@ public sealed class NoteRenderer
 
     /// <summary>The key a drum hit's envelope rates are key-followed by.</summary>
     /// <param name="key">The drum key, as the kit stores it.</param>
-    /// <param name="drumPitch">Coarse-pitch override from NRPN <c>0x18</c>, in semitone steps.</param>
+    /// <param name="drumPitch">Coarse-pitch override from NRPN <c>0x18</c>, in kit-plane steps.</param>
     /// <returns>The index for the rate key-follow tables.</returns>
     /// <remarks>
     /// <para>
@@ -205,9 +205,10 @@ public sealed class NoteRenderer
     /// SC-55 standard kit, the plane equals the engine's index for all 61.
     /// </para>
     /// <para>
-    /// The NRPN moves it a whole semitone per step, where the same step moves the <em>pitch</em> plane
-    /// by two — the plane runs at 50 cents a step and this index does not. That is why the offset is
-    /// added here rather than reading the already-modified plane back.
+    /// The NRPN moves it one plane step per step under the same 0–0x7F clamp the pitch plane gets —
+    /// <see cref="Patches.DrumKeyOverrides.Apply(Patches.DrumKey, int, int?)"/> now applies the
+    /// identical law, so this and the applied plane agree; the offset is still added here so the
+    /// rate index never depends on reading a modified plane back.
     /// </para>
     /// </remarks>
     public static int EnvelopeRateKey(DrumKey key, int drumPitch) =>
@@ -241,7 +242,7 @@ public sealed class NoteRenderer
     /// <summary>How much longer a hit needs than the nominal ring, before it is rendered.</summary>
     /// <param name="note">MIDI note, which selects the kit entry.</param>
     /// <param name="kit">Kit record index.</param>
-    /// <param name="drumPitch">Coarse-pitch override from NRPN <c>0x18</c>, in semitone steps.</param>
+    /// <param name="drumPitch">Coarse-pitch override from NRPN <c>0x18</c>, in kit-plane steps.</param>
     /// <returns>A factor of one or more.</returns>
     /// <remarks>Lets a caller size its own buffers to the same window the render will use.</remarks>
     public double DrumRingScale(int note, int kit, int drumPitch) =>

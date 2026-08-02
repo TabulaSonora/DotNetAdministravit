@@ -987,9 +987,9 @@ public sealed class ToneGenerator
 
     private void StartDrum(int channel, int note, int velocity)
     {
-        // The kit's own key is kept alongside the overridden one, because the envelope rate
-        // key-follow indexes off the stored plane rather than the plane the override has already
-        // doubled the NRPN offset into -- see NoteRenderer.EnvelopeRateKey.
+        // The kit's own key is kept alongside the overridden one: Apply also resolves the panpot,
+        // and the envelope rate key-follow takes the plane through its own clamp -- see
+        // NoteRenderer.EnvelopeRateKey.
         var kitKey = _notes.Drums.Key(note, _drumKit[channel / SequenceBuilder.ChannelCount]);
         var key = _parts[channel].DrumKeys.Apply(kitKey, note, _notes.Noise);
         var rateKey = NoteRenderer.EnvelopeRateKey(kitKey, _parts[channel].DrumKeys.PitchOffset(note));
