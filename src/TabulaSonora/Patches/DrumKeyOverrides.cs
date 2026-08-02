@@ -1,3 +1,5 @@
+using TabulaSonora.Dsp;
+
 namespace TabulaSonora.Patches;
 
 /// <summary>
@@ -35,7 +37,6 @@ public sealed class DrumKeyOverrides
 
     private readonly int[] _pitch = new int[KeyCount];
     private readonly int[] _pan = new int[KeyCount];
-    private uint _panState;
     private bool _any;
 
     /// <summary>Creates an empty set, in which every key follows its kit record.</summary>
@@ -53,7 +54,6 @@ public sealed class DrumKeyOverrides
     {
         Array.Clear(_pitch);
         Array.Fill(_pan, -1);
-        _panState = 0;
         _any = false;
     }
 
@@ -111,42 +111,35 @@ public sealed class DrumKeyOverrides
     /// <summary>Resolves the panpot for one strike, spreading a randomly-panned key.</summary>
     /// <param name="note">MIDI note number.</param>
     /// <returns>The pan to sound this strike at, or <see langword="null"/> to keep the kit's own.</returns>
+    /// <param name="noise">
+    /// The engine's shared generator, which supplies the position for a randomly-panned key.
+    /// </param>
     /// <remarks>
-    /// <para>
-    /// <b>The spread is an invention, isolated here so it can be replaced.</b> The engine's own
-    /// generator was not traced, so the sequence cannot match; what is reproduced is that successive
-    /// strikes land in different places rather than stacking in one. It is driven by a counter and a
-    /// fixed multiplier rather than <see cref="Random"/>, so a render stays reproducible — an
-    /// unseeded generator would make every render of the same file different and every fixture
-    /// comparison meaningless.
-    /// </para>
-    /// <para>
-    /// The range is 1 to 127, skipping 0 so a resolved value never re-enters this branch.
-    /// </para>
+    /// The spread is the engine's own: a draw from <see cref="EngineNoise"/>, the same generator the
+    /// pitch jitter and the random LFO waveforms take from, reduced to a pan position by its top
+    /// seven bits. What still cannot match is the <em>sequence</em> under polyphony, since that
+    /// depends on how many voices consume draws and in what order.
     /// </remarks>
-    public int? PanForHit(int note)
+    public int? PanForHit(int note, EngineNoise noise)
     {
+        ArgumentNullException.ThrowIfNull(noise);
+
         if (Pan(note) is not { } pan)
         {
             return null;
         }
 
-        if (pan != RandomPan)
-        {
-            return pan;
-        }
-
-        // A 32-bit LCG step, taking the high bits, which are the well-distributed ones.
-        _panState = (_panState * 1664525) + 1013904223;
-        return 1 + (int)((_panState >> 16) % 127);
+        return pan != RandomPan ? pan : noise.NextPan();
     }
 
     /// <summary>Layers this part's overrides over a key read from the kit record, for one strike.</summary>
     /// <param name="key">The key as the kit stores it.</param>
     /// <param name="note">MIDI note number.</param>
+    /// <param name="noise">The engine's shared generator, for a randomly-panned key.</param>
     /// <returns>The key as the part should sound this strike.</returns>
-    /// <remarks>This advances the random-pan spread, so call it once per strike.</remarks>
-    public DrumKey Apply(DrumKey key, int note) => Apply(key, PitchOffset(note), PanForHit(note));
+    /// <remarks>This consumes a draw for a randomly-panned key, so call it once per strike.</remarks>
+    public DrumKey Apply(DrumKey key, int note, EngineNoise noise) =>
+        Apply(key, PitchOffset(note), PanForHit(note, noise));
 
     /// <summary>Layers a latched pair of overrides over a key read from the kit record.</summary>
     /// <param name="key">The key as the kit stores it.</param>

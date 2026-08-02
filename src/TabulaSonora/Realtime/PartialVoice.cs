@@ -50,6 +50,7 @@ internal sealed class PartialVoice
 
     private int _pan;
     private bool _panFollowsPart;
+    private int _randomPan = -1;
     private double _levelGain = 1.0;
 
     private long _sample;
@@ -119,6 +120,7 @@ internal sealed class PartialVoice
         _levelGain = setup.LevelGain;
         _pan = setup.Pan;
         _panFollowsPart = setup.PanFollowsPart;
+        _randomPan = setup.RandomPan ?? -1;
 
         _reader.Start(setup.Wave);
         _filter = default;
@@ -244,7 +246,8 @@ internal sealed class PartialVoice
     /// <param name="partPan">CC#10 for the part.</param>
     /// <returns>The left and right gains.</returns>
     public (double Left, double Right) PanGains(int partPan) =>
-        _panLaw.Gains(_panFollowsPart ? _pan + (partPan - PanLaw.Centre) : _pan);
+        _randomPan >= 0 ? _panLaw.Gains(_randomPan)
+        : _panLaw.Gains(_panFollowsPart ? _pan + (partPan - PanLaw.Centre) : _pan);
 
     /// <summary>The kit level, folded in downstream of the voice gain.</summary>
     public double LevelGain => _levelGain;
@@ -468,6 +471,15 @@ internal readonly record struct VoiceSetup
 
     /// <summary>Whether the part's own pan offsets this voice's.</summary>
     public bool PanFollowsPart { get; init; }
+
+    /// <summary>
+    /// A pan position drawn for this note, or <see langword="null"/> to pan normally.
+    /// </summary>
+    /// <remarks>
+    /// GS treats a part panpot of zero as RND: the engine draws a position per note and uses it
+    /// outright, ignoring the partial's own pan rather than offsetting from it.
+    /// </remarks>
+    public int? RandomPan { get; init; }
 
     /// <summary>The drum kit level, applied downstream of the voice gain.</summary>
     public double LevelGain { get; init; }

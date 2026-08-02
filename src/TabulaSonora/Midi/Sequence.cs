@@ -1,3 +1,4 @@
+using TabulaSonora.Dsp;
 using TabulaSonora.Patches;
 
 namespace TabulaSonora.Midi;
@@ -259,6 +260,11 @@ public static class SequenceBuilder
             drumKeys[i] = new DrumKeyOverrides();
         }
 
+        // Random pan is resolved while the sequence is built rather than at render time, so this
+        // path needs its own generator. It starts from the engine's reset state, which keeps a
+        // render of the same file reproducible.
+        var noise = new EngineNoise();
+
         long lastPosition = 0;
 
         void CloseNote(int channel, int note, long offPosition)
@@ -318,7 +324,7 @@ public static class SequenceBuilder
                     open.Add((
                         channel, e.Data1, e.Position, e.Data2,
                         drumKeys[channel].PitchOffset(e.Data1),
-                        drumKeys[channel].PanForHit(e.Data1)));
+                        drumKeys[channel].PanForHit(e.Data1, noise)));
                     break;
 
                 case 0x80:
@@ -386,7 +392,9 @@ public static class SequenceBuilder
         {
             case 1: part.Modulation.Add(e.Position, value); break;
             case 7: part.Volume.Add(e.Position, value); break;
-            case 10: part.Pan.Add(e.Position, value); break;
+            // CC#10 zero is stored as one, so the wheel cannot reach the random position: only
+            // the GS SysEx panpot writes a true zero, which is what RND is.
+            case 10: part.Pan.Add(e.Position, value == 0 ? 1 : value); break;
             case 11: part.Expression.Add(e.Position, value); break;
             case 91: part.ReverbSend.Add(e.Position, value); break;
             case 93: part.ChorusSend.Add(e.Position, value); break;

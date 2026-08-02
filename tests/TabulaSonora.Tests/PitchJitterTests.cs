@@ -1,4 +1,6 @@
 using TabulaSonora.Dsp;
+using TabulaSonora.Realtime;
+using TabulaSonora.Rom;
 
 namespace TabulaSonora.Tests;
 
@@ -84,5 +86,45 @@ public class PitchJitterTests
 
         // The control: the ordinary runner did get pulled toward the release target.
         Assert.True(normal.Level < oneShot.Level);
+    }
+}
+
+/// <summary>
+/// Pan: the engine's own random source, and the clamp that keeps CC#10 away from it.
+/// </summary>
+public class RandomPanTests
+{
+    [Fact]
+    public void RandomPanDrawsTheTopSevenBitsOfTheSharedGenerator()
+    {
+        var noise = new EngineNoise();
+        var expected = new EngineNoise();
+
+        for (var i = 0; i < 8; i++)
+        {
+            Assert.Equal(expected.Next() >> 9, noise.NextPan());
+        }
+
+        // A pan position, so it must stay on CC#10's scale.
+        var fresh = new EngineNoise();
+        for (var i = 0; i < 512; i++)
+        {
+            Assert.InRange(fresh.NextPan(), 0, 127);
+        }
+    }
+
+    [SkippableFact]
+    public void ControlChangeTenCannotReachTheRandomPosition()
+    {
+        using var rom = RomImage.Open(TestData.RequireSccore(), RomVerification.Quick);
+        var generator = ToneGenerator.Create(rom, new ToneGeneratorOptions { Reverb = false, Chorus = false });
+
+        // Measured on the DLL: CC#10 zero stores one, so the part sounds hard left every strike
+        // rather than being repositioned. Only the SysEx panpot writes the zero that means RND.
+        generator.SendChannel(0xB0, 10, 0);
+        Assert.Equal(1, generator.Parts[0].Pan);
+
+        generator.SendChannel(0xB0, 10, 64);
+        Assert.Equal(64, generator.Parts[0].Pan);
     }
 }

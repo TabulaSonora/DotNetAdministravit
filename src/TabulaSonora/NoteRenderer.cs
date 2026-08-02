@@ -61,19 +61,29 @@ public sealed class NoteRenderer
 
         _envelopes = envelope;
         Tables = tables;
+        Noise = new EngineNoise();
         _directory = new PatchDirectory(tables);
         _drums = new DrumKitTable(rom);
         _interpolator = new Interpolator(tables);
         _sampler = new Sampler(new WaveRom(rom), _interpolator);
         _tva = new TvaChain(tables, envelope);
         _tvf = new TvfChain(tables, envelope);
-        _pitch = new PitchChain(tables, envelope);
+        _pitch = new PitchChain(tables, envelope, Noise);
         _lfo = new LfoEngine(tables);
         _pan = new PanLaw(tables);
     }
 
     /// <summary>The static tables this renderer loaded.</summary>
     public TableSet Tables { get; }
+
+    /// <summary>
+    /// The engine's shared pseudo-random source.
+    /// </summary>
+    /// <remarks>
+    /// One generator serves the whole engine — pitch start jitter, random pan, and the random LFO
+    /// waveforms all draw from it — so it lives here rather than inside any one chain.
+    /// </remarks>
+    public EngineNoise Noise { get; }
 
     /// <summary>The patch directory.</summary>
     public PatchDirectory Directory => _directory;

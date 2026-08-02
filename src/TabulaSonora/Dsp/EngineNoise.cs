@@ -39,6 +39,16 @@ public sealed class EngineNoise
         return (ushort)(_walk ^ _shift);
     }
 
+    /// <summary>
+    /// Draws a random pan position, 0 to 127.
+    /// </summary>
+    /// <returns>The position, on the same scale as CC#10.</returns>
+    /// <remarks>
+    /// The engine takes the top seven bits of a draw. This is what GS random pan resolves to — a
+    /// part whose CC#10 is zero, or a drum key whose pan NRPN is zero, is repositioned per note.
+    /// </remarks>
+    public int NextPan() => Next() >> 9;
+
     /// <summary>Returns the generator to the engine's reset state.</summary>
     public void Reset()
     {

@@ -186,7 +186,7 @@ public sealed class PitchChain
         [0, 3276, 6553, 9830, 13107, 16383, 19660, 22937, 26214, 29491, 32767];
 
     private readonly EnvelopeMachine _envelope;
-    private readonly EngineNoise _noise = new();
+    private readonly EngineNoise _noise;
     private readonly ushort[] _portamentoStep;
     private readonly byte[] _pitchBias;
     private readonly ushort[] _depthVelocitySensitivity;
@@ -199,12 +199,17 @@ public sealed class PitchChain
     /// <summary>Creates the chain over a loaded table set.</summary>
     /// <param name="tables">The static tables.</param>
     /// <param name="envelope">The shared segment machine.</param>
-    public PitchChain(TableSet tables, EnvelopeMachine envelope)
+    /// <param name="noise">
+    /// The engine's shared generator; one is created here when the caller has none, which keeps a
+    /// standalone chain usable but gives it a private draw sequence.
+    /// </param>
+    public PitchChain(TableSet tables, EnvelopeMachine envelope, EngineNoise? noise = null)
     {
         ArgumentNullException.ThrowIfNull(tables);
         ArgumentNullException.ThrowIfNull(envelope);
 
         _envelope = envelope;
+        _noise = noise ?? new EngineNoise();
         _pitchBias = tables.PitchBias;
         _depthVelocitySensitivity = tables.PitchDepthVs;
         _rateKeyFollow0 = tables.KfPitchRate0;

@@ -611,7 +611,9 @@ public sealed class ToneGenerator
             case 0: part.Bank = value; break;
             case 1: part.Modulation = value; break;
             case 7: part.Volume = value; break;
-            case 10: part.Pan = value; break;
+            // CC#10 zero is stored as one, so the wheel cannot reach the random position: only
+            // the GS SysEx panpot writes a true zero, which is what RND is.
+            case 10: part.Pan = value == 0 ? 1 : value; break;
             case 11: part.Expression = value; break;
             case 91: part.ReverbSend = value; break;
             case 93: part.ChorusSend = value; break;
@@ -798,6 +800,11 @@ public sealed class ToneGenerator
         // Mono short-circuits the check rather than re-reading it after the flush, exactly as the
         // engine does — the voices it just chased away are still fading, so a fresh count would say
         // the part is busy.
+        // A part panpot of zero is GS RND: the engine repositions the note outright rather than
+        // offsetting the partial's own pan, and redraws for every note. Only the SysEx panpot can
+        // set it -- CC#10 clamps zero to one, so the wheel cannot reach this.
+        int? randomPan = part.Pan == 0 ? _notes.Noise.NextPan() : null;
+
         var quiet = part.Mono || !AnyVoiceOn(channel);
         var glideFrom = part.PortamentoControlKey >= 0 ? part.PortamentoControlKey
             : part.PortamentoOn && quiet ? part.LastKey
@@ -855,6 +862,7 @@ public sealed class ToneGenerator
                     BasePitch = _notes.Pitch.BasePitchMilliSemitones(partial, note, partial.KeyCenter),
                     Pan = partial.Pan,
                     PanFollowsPart = true,
+                    RandomPan = randomPan,
                     LevelGain = 1.0,
                     AutoReleaseSamples = -1,
                 });
@@ -875,7 +883,7 @@ public sealed class ToneGenerator
         // key-follow indexes off the stored plane rather than the plane the override has already
         // doubled the NRPN offset into -- see NoteRenderer.EnvelopeRateKey.
         var kitKey = _notes.Drums.Key(note, _drumKit);
-        var key = _parts[channel].DrumKeys.Apply(kitKey, note);
+        var key = _parts[channel].DrumKeys.Apply(kitKey, note, _notes.Noise);
         var rateKey = NoteRenderer.EnvelopeRateKey(kitKey, _parts[channel].DrumKeys.PitchOffset(note));
         var resolved = _notes.Directory.Resolve(key.Tone, note: 60, velocity);
         var tone = _notes.Directory.GetTone(key.Tone);
