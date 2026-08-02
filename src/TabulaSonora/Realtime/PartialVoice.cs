@@ -58,6 +58,7 @@ internal sealed class PartialVoice
     private long _autoRelease = -1;
     private long _controlTick;
     private long _holdSamples;
+    private bool _halfDamper;
 
     private double _ratio = 1.0;
     private double _tremolo = 1.0;
@@ -109,6 +110,7 @@ internal sealed class PartialVoice
         _controlTick = 0;
         _autoRelease = setup.AutoReleaseSamples;
         _holdSamples = setup.EnvelopeHoldSamples;
+        _halfDamper = setup.HalfDamper;
         _isDrum = setup.IsDrum;
         _levelGain = setup.LevelGain;
         _pan = setup.Pan;
@@ -151,7 +153,16 @@ internal sealed class PartialVoice
     /// read position frozen until this moment. A voice whose delayed start has not fired yet is
     /// killed without ever sounding.
     /// </remarks>
-    public void NoteOff()
+    public void NoteOff() => NoteOff(0);
+
+    /// <summary>Starts the release with a damper pedal value.</summary>
+    /// <param name="damper">The part's CC64 value when the release engages.</param>
+    /// <remarks>
+    /// On a half-damper tone (the pianos) the raw pedal value scales the release rates — a pedal
+    /// lifted only part-way through 1–0x3f lengthens the release by roughly 128/(128−v). Every
+    /// other tone quantises the pedal, so the value here is zero by the time a release can engage.
+    /// </remarks>
+    public void NoteOff(int damper)
     {
         if (_isDrum)
         {
@@ -170,10 +181,10 @@ internal sealed class PartialVoice
             return;
         }
 
-        Release();
+        Release(_halfDamper ? Math.Clamp(damper, 0, 0x3F) : 0);
     }
 
-    private void Release()
+    private void Release(int damper = 0)
     {
         if (_noteOff >= 0)
         {
@@ -184,8 +195,9 @@ internal sealed class PartialVoice
         // and only from the control tick — releases on the same one as the amplitude and cutoff.
         // The envelopes themselves run on held time, so a delayed start shifts their note-off with it.
         _noteOff = SegmentEnvelope.DeferToControlTick(_sample, ToneGenerator.ControlBlock);
-        _amplitude?.NoteOff(EnvelopeSample(_sample));
-        _cutoff?.NoteOff(EnvelopeSample(_sample));
+        _pitchEnvelope?.SetReleaseDamper(damper);
+        _amplitude?.NoteOff(EnvelopeSample(_sample), damper);
+        _cutoff?.NoteOff(EnvelopeSample(_sample), damper);
     }
 
     /// <summary>Maps an absolute sample index onto the envelopes' own time base.</summary>
@@ -456,4 +468,7 @@ internal readonly record struct VoiceSetup
     /// or <see cref="EnvelopeMachine.HoldForever"/> for a key-off layer that fires at note-off.
     /// </summary>
     public long EnvelopeHoldSamples { get; init; }
+
+    /// <summary>Whether the tone responds to half-damper (tone header byte 0x0d bit 2).</summary>
+    public bool HalfDamper { get; init; }
 }

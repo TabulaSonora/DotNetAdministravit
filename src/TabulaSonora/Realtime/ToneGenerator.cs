@@ -316,7 +316,7 @@ public sealed class ToneGenerator
                 }
                 else
                 {
-                    StopNote(channel, data1);
+                    StopNote(channel, data1, part.Damper);
                 }
 
                 break;
@@ -612,10 +612,12 @@ public sealed class ToneGenerator
                 part.Damper = value;
                 if (value < 0x40)
                 {
-                    // Oldest first, which is the order the offline renderer closes them in too.
+                    // Oldest first, which is the order the offline renderer closes them in too. The
+                    // pedal value at the lift reaches the release rate on half-damper tones, so a
+                    // pedal eased up through 1-0x3f gives those notes a proportionally longer tail.
                     foreach (var note in part.Sustained)
                     {
-                        StopNote(channel, note);
+                        StopNote(channel, note, value);
                     }
 
                     part.Sustained.Clear();
@@ -675,13 +677,13 @@ public sealed class ToneGenerator
         }
     }
 
-    private void StopNote(int channel, int note)
+    private void StopNote(int channel, int note, int damper = 0)
     {
         for (var i = 0; i < _slots.Length; i++)
         {
             if (_slots[i] is { } voice && voice.Channel == channel && voice.Note == note && !voice.Released)
             {
-                voice.NoteOff();
+                voice.NoteOff(damper);
             }
         }
 
@@ -743,6 +745,7 @@ public sealed class ToneGenerator
                     Lfo1 = lfo1,
                     Lfo2 = lfo2,
                     EnvelopeHoldSamples = _notes.Envelopes.HoldSamples(partial, velocity),
+                    HalfDamper = _notes.Directory.HalfDamper(toneNumber),
                     BasePitch = _notes.Pitch.BasePitchMilliSemitones(partial, note, partial.KeyCenter),
                     Pan = partial.Pan,
                     PanFollowsPart = true,

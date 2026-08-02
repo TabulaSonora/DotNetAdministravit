@@ -145,6 +145,18 @@ public sealed class PatchDirectory
     /// <returns>The level byte.</returns>
     public int ToneLevel(int toneNumber) => _tone[(toneNumber * Patches.Tone.Stride) + 0x0C];
 
+    /// <summary>Whether a tone responds to half-damper (continuous CC64).</summary>
+    /// <param name="toneNumber">Tone number.</param>
+    /// <returns>Whether the pedal value reaches the release rate unquantised.</returns>
+    /// <remarks>
+    /// Tone header byte 0x0d bit 2, copied to the part on tone select. Set on exactly 57 of the
+    /// 2363 tones — the piano family — matching the hardware, where half-pedal is a piano feature.
+    /// Every other tone's pedal is quantised to fully up or fully down.
+    /// </remarks>
+    public bool HalfDamper(int toneNumber) =>
+        toneNumber >= 0 && toneNumber < ToneCount
+        && (_tone[(toneNumber * Patches.Tone.Stride) + 0x0D] & 4) != 0;
+
     /// <summary>
     /// Reads a partial block by its <em>slot</em> rather than its position among the present partials.
     /// </summary>

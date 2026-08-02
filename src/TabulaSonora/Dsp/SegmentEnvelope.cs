@@ -31,8 +31,8 @@ public sealed class SegmentEnvelope
 
     private readonly double _releaseTarget;
     private readonly bool _releaseLinear;
-    private readonly double _releaseSpan;
-    private readonly long _releaseSamples;
+    private double _releaseSpan;
+    private long _releaseSamples;
     private readonly double _afterRelease;
     private readonly long _controlTick;
 
@@ -51,7 +51,7 @@ public sealed class SegmentEnvelope
     /// <param name="controlTickSamples">
     /// The control tick in samples — the grid note-off is acted on. A tick of one releases at the note
     /// after note-off, which is as close to releasing immediately as this gets and is <em>not</em> what
-    /// the engine does; see <see cref="NoteOff"/>.
+    /// the engine does; see <see cref="NoteOff(long, int)"/>.
     /// </param>
     /// <exception cref="ArgumentException">A parameter array is not four long.</exception>
     public SegmentEnvelope(
@@ -123,11 +123,35 @@ public sealed class SegmentEnvelope
     /// this is what puts the amplitude and cutoff envelopes back on the same grid as it.
     /// </para>
     /// </remarks>
-    public void NoteOff(long sample)
+    public void NoteOff(long sample) => NoteOff(sample, 0);
+
+    /// <summary>
+    /// Starts the release at a sample position with a half-damper pedal value. Later calls are
+    /// ignored.
+    /// </summary>
+    /// <param name="sample">Sample index of note-off, relative to note-on.</param>
+    /// <param name="damper">
+    /// CC64 value at release, 1–0x3f for a half-pressed pedal on a half-damper tone, else zero.
+    /// </param>
+    /// <remarks>
+    /// The engine writes the pedal value into the release ramp's rate-scale byte, which multiplies
+    /// the rate word by <c>(0x10000 − (v&lt;&lt;9) − 1) / 0x10000</c> — roughly <c>1 − v/128</c> —
+    /// so a half-pressed pedal lengthens the release by the reciprocal. Only the 57 piano tones
+    /// carry the half-damper capability (tone header byte 0x0d bit 2); every other tone's pedal
+    /// value is quantised to 0 or 0x7f before it can get here.
+    /// </remarks>
+    public void NoteOff(long sample, int damper)
     {
         if (_noteOff >= 0)
         {
             return;
+        }
+
+        if (damper > 0)
+        {
+            var scale = 65536.0 / (0xFFFF - (Math.Min(damper, 0x3F) << 9));
+            _releaseSpan *= scale;
+            _releaseSamples = Math.Max(1, (long)_releaseSpan);
         }
 
         var deferred = DeferToControlTick(sample, _controlTick);

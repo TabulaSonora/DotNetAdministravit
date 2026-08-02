@@ -192,7 +192,7 @@ public sealed class TvaChain
     /// <returns>The envelope, in the linear gain domain.</returns>
     /// <remarks>
     /// The envelope does not need to know when the note ends: call
-    /// <see cref="SegmentEnvelope.NoteOff"/> when it does. That is what lets the real-time voice loop
+    /// <see cref="SegmentEnvelope.NoteOff(long, int)"/> when it does. That is what lets the real-time voice loop
     /// and the offline renderer share one implementation.
     /// </remarks>
     /// <param name="rateKey">

@@ -44,6 +44,7 @@ public sealed class PitchEnvelopeRunner
     private int _segment;
     private int _phase;
     private bool _released;
+    private int _releaseDamper;
 
     /// <summary>Creates a runner over a decoded envelope.</summary>
     /// <param name="envelope">The decoded targets and timings.</param>
@@ -95,6 +96,17 @@ public sealed class PitchEnvelopeRunner
     /// <summary>The offset in milli-semitones after the last tick.</summary>
     public double Level => _level;
 
+    /// <summary>
+    /// Sets the half-damper pedal value the release will be scaled by.
+    /// </summary>
+    /// <param name="damper">CC64 value at release, 1–0x3f for a half-pressed pedal, else zero.</param>
+    /// <remarks>
+    /// The engine writes the pedal value into the release ramp's rate-scale byte; the effective
+    /// rate is <c>rate × (0xffff − (v&lt;&lt;9)) &gt;&gt; 16</c>. Only meaningful before the
+    /// release engages; the pitch-only 0x4000 shape word is unaffected.
+    /// </remarks>
+    public void SetReleaseDamper(int damper) => _releaseDamper = Math.Clamp(damper, 0, 0x3F);
+
     /// <summary>Advances one control tick.</summary>
     /// <param name="released">Whether the note has been released by this tick.</param>
     /// <returns>The offset in milli-semitones.</returns>
@@ -110,12 +122,12 @@ public sealed class PitchEnvelopeRunner
             _segment = -1;
             _phase = 0;
             target = _release;
-            rate = _releaseRate;
+            rate = ScaledReleaseRate();
         }
         else if (_segment < 0)
         {
             target = _release;
-            rate = _releaseRate;
+            rate = ScaledReleaseRate();
         }
         else if (_segment < _rates.Length)
         {
@@ -145,6 +157,9 @@ public sealed class PitchEnvelopeRunner
 
         return _level;
     }
+
+    private int ScaledReleaseRate() =>
+        _releaseDamper == 0 ? _releaseRate : (0xFFFF - (_releaseDamper << 9)) * _releaseRate >> 16;
 }
 
 /// <summary>
