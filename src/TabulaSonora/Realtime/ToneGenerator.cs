@@ -88,10 +88,24 @@ public sealed class ToneGenerator
     /// <summary>Samples per control tick, at 100 Hz.</summary>
     public const int ControlBlock = NoteRenderer.ControlBlock;
 
+    /// <summary>How many MIDI ports the engine accepts input on.</summary>
+    /// <remarks>
+    /// Two, because the module has thirty-two parts and addresses them as <c>port × 16 + channel</c>.
+    /// It allocates all thirty-two unconditionally — the part count global is initialised to
+    /// <c>0x20</c> and the second part array sits exactly sixteen strides on from the first — but
+    /// <c>midi_drain_ready_to_ports</c> masks the port field out of every incoming packet with
+    /// <c>and r8b,0Fh</c>, so nothing but port A can be reached. Widening that mask to <c>0x1f</c>
+    /// admits the second port and no more, which is what this engine implements.
+    /// </remarks>
+    public const int PortCount = 2;
+
+    /// <summary>How many parts the engine has: sixteen per port.</summary>
+    public const int PartCount = PortCount * SequenceBuilder.ChannelCount;
+
     private readonly NoteRenderer _notes;
     private readonly ToneGeneratorOptions _options;
     private readonly VoicePool _pool = new();
-    private readonly Part[] _parts = new Part[SequenceBuilder.ChannelCount];
+    private readonly Part[] _parts = new Part[PartCount];
     private readonly PartialVoice?[] _slots = new PartialVoice?[VoicePool.MaxVoices];
     private readonly Stack<PartialVoice> _spare = new();
     private readonly List<PartialVoice> _dying = [];
@@ -122,7 +136,8 @@ public sealed class ToneGenerator
     private int? _chorusBuiltFor = -1;
     private int? _delayBuiltFor = -1;
 
-    private int _drumKit;
+    // One per port: each port's channel 10 is its own drum part, with its own kit.
+    private readonly int[] _drumKit = new int[PortCount];
     private long _position;
 
     /// <summary>Creates an engine over a note renderer's loaded tables.</summary>
@@ -199,7 +214,11 @@ public sealed class ToneGenerator
         }
     }
 
-    /// <summary>The sixteen parts, indexed by MIDI channel.</summary>
+    /// <summary>The thirty-two parts, indexed by <c>port × 16 + channel</c>.</summary>
+    /// <remarks>
+    /// The first sixteen are port A and are what a host that never names a port drives, so an
+    /// engine sent only port-A traffic behaves exactly as a sixteen-part one.
+    /// </remarks>
     public IReadOnlyList<Part> Parts => _parts;
 
     /// <summary>The voice allocator.</summary>
@@ -211,7 +230,19 @@ public sealed class ToneGenerator
     /// define leaves the kit as it was, so <see cref="DrumKitTable.KitForProgram"/> over the part's
     /// current program does not always answer what is actually loaded.
     /// </remarks>
-    public int DrumKit => _drumKit;
+    public int DrumKit => _drumKit[0];
+
+    /// <summary>The drum kit in force on one port.</summary>
+    /// <param name="port">The port, 0 or 1.</param>
+    /// <returns>The kit number.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The port is not 0 or 1.</exception>
+    /// <remarks>Each port has its own drum part, so each carries its own kit.</remarks>
+    public int DrumKitFor(int port)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(port);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(port, PortCount);
+        return _drumKit[port];
+    }
 
     /// <summary>Which drum map row a program change on the drum part resolves against.</summary>
     /// <remarks>
@@ -263,36 +294,57 @@ public sealed class ToneGenerator
         _chorus?.Reset();
         _delay?.Reset();
 
-        _drumKit = 0;
+        Array.Clear(_drumKit);
         _position = 0;
         _blockOffset = BlockSize;
         NoteCount = 0;
     }
 
-    /// <summary>Applies one MIDI event.</summary>
+    /// <summary>Applies one MIDI event on port A.</summary>
     /// <param name="message">The event; its position is ignored, since it applies now.</param>
-    public void Send(in MidiEvent message)
+    public void Send(in MidiEvent message) => Send(0, message);
+
+    /// <summary>Applies one MIDI event on a port.</summary>
+    /// <param name="port">The port, 0 or 1. Anything wider is folded onto those two.</param>
+    /// <param name="message">The event; its position is ignored, since it applies now.</param>
+    public void Send(int port, in MidiEvent message)
     {
         if (message.Kind == MidiEventKind.SysEx)
         {
             if (message.SysEx is { } bytes)
             {
-                SendSysEx(bytes);
+                SendSysEx(port, bytes);
             }
 
             return;
         }
 
-        SendChannel(message.Status, message.Data1, message.Data2);
+        SendChannel(port, message.Status, message.Data1, message.Data2);
     }
 
-    /// <summary>Applies one channel voice message.</summary>
+    /// <summary>Applies one channel voice message on port A.</summary>
     /// <param name="status">Status byte.</param>
     /// <param name="data1">First data byte.</param>
     /// <param name="data2">Second data byte.</param>
-    public void SendChannel(int status, int data1, int data2)
+    /// <remarks>
+    /// The equivalent of the module's <c>TG_ShortMidiIn</c>, which builds a packet with the port
+    /// field hardwired to zero and so can only ever reach port A.
+    /// </remarks>
+    public void SendChannel(int status, int data1, int data2) => SendChannel(0, status, data1, data2);
+
+    /// <summary>Applies one channel voice message on a port.</summary>
+    /// <param name="port">The port, 0 or 1. Anything wider is folded onto those two.</param>
+    /// <param name="status">Status byte.</param>
+    /// <param name="data1">First data byte.</param>
+    /// <param name="data2">Second data byte.</param>
+    /// <remarks>
+    /// The port travels with the message rather than being selected beforehand, which is how the
+    /// module works: it dispatches on the port field of each packet as that packet is drained, and
+    /// nothing carries the field over from one message to the next.
+    /// </remarks>
+    public void SendChannel(int port, int status, int data1, int data2)
     {
-        var channel = status & 0x0F;
+        var channel = PartOf(port, status & 0x0F);
         var part = _parts[channel];
 
         switch (status & 0xF0)
@@ -335,12 +387,12 @@ public sealed class ToneGenerator
 
             case 0xC0:
                 part.Program = data1;
-                if (channel == _options.DrumChannel &&
+                if (IsDrumPart(channel) &&
                     _notes.Drums.KitForProgram(data1, EffectiveDrumMapRow) is { } kit)
                 {
                     // An undefined program leaves the current kit in place rather than falling back
                     // to Standard.
-                    _drumKit = kit;
+                    _drumKit[channel / SequenceBuilder.ChannelCount] = kit;
                 }
 
                 break;
@@ -351,9 +403,20 @@ public sealed class ToneGenerator
         }
     }
 
-    /// <summary>Applies one system-exclusive message.</summary>
+    /// <summary>Applies one system-exclusive message on port A.</summary>
     /// <param name="bytes">The message, including the leading <c>F0</c>.</param>
-    public void SendSysEx(ReadOnlySpan<byte> bytes)
+    public void SendSysEx(ReadOnlySpan<byte> bytes) => SendSysEx(0, bytes);
+
+    /// <summary>Applies one system-exclusive message on a port.</summary>
+    /// <param name="port">The port, 0 or 1. Anything wider is folded onto those two.</param>
+    /// <param name="bytes">The message, including the leading <c>F0</c>.</param>
+    /// <remarks>
+    /// GS part addressing is port-relative: a <c>40 1n</c> block address names a part on whichever
+    /// port the message arrived on. The module does this by latching the arriving packet's port
+    /// field into the high nibble of its current-channel global and selecting the part array from
+    /// it, so the same address means a different part on each port.
+    /// </remarks>
+    public void SendSysEx(int port, ReadOnlySpan<byte> bytes)
     {
         // Universal master volume: F0 7F 7F 04 01 ll mm F7.
         if (bytes.Length >= 8 && bytes[0] == 0xF0 && bytes[1] == 0x7F && bytes[3] == 0x04 && bytes[4] == 0x01)
@@ -391,8 +454,39 @@ public sealed class ToneGenerator
         }
         else if (a1 == 0x40 && (a2 & 0xF0) == 0x10 && a3 == 0x2C)
         {
-            _parts[SequenceBuilder.ChannelFromBlock(a2 & 0x0F)].DelaySend = value;
+            _parts[PartOf(port, SequenceBuilder.ChannelFromBlock(a2 & 0x0F))].DelaySend = value;
         }
+    }
+
+    /// <summary>Applies one USB-MIDI Event Packet.</summary>
+    /// <param name="packet">
+    /// The packet: <c>(port &lt;&lt; 4) | class</c> in the low byte, then the MIDI message in the
+    /// three above it, least-significant first.
+    /// </param>
+    /// <remarks>
+    /// <para>
+    /// The equivalent of the module's <c>TG_PMidiIn</c>, which is the only one of its exports that
+    /// can name a port. The message length is taken from the status byte rather than the class
+    /// nibble, so a caller that leaves the class at zero still gets the right message.
+    /// </para>
+    /// <para>
+    /// The port field is masked with <c>0x1F</c> — the class nibble plus the low bit of the port —
+    /// so ports 0 and 1 pass through and anything wider folds onto them by its low bit. That is the
+    /// module's own mask widened by one bit: it ships as <c>0x0F</c>, which discards the port
+    /// outright and is why the stock DLL reaches only sixteen of its thirty-two parts.
+    /// </para>
+    /// </remarks>
+    public void SendPacket(int packet)
+    {
+        var header = packet & PortMask;
+        var status = (packet >> 8) & 0xFF;
+        if (status < 0x80 || status >= 0xF0)
+        {
+            // System common and realtime carry no channel, so there is no part for them to reach.
+            return;
+        }
+
+        SendChannel(header >> 4, status, (packet >> 16) & 0x7F, (packet >> 24) & 0x7F);
     }
 
     /// <summary>
@@ -496,7 +590,9 @@ public sealed class ToneGenerator
 
         // A silenced channel contributes nothing at all -- not to the dry mix and not to the sends
         // either, so muting a part also removes its tail. It keeps running, so unmuting is instant.
-        if (_options.Channels is { } mask && !mask.IsAudible(voice.Channel))
+        // The mask is sixteen wide and indexed by channel, so muting a channel silences it on both
+        // ports -- one mixer strip per channel rather than per part.
+        if (_options.Channels is { } mask && !mask.IsAudible(voice.Channel % SequenceBuilder.ChannelCount))
         {
             return;
         }
@@ -603,6 +699,18 @@ public sealed class ToneGenerator
             _delayBuiltFor = _delayType;
         }
     }
+
+    // The module's own mask, widened by one bit. It clears everything above the port's low bit, so
+    // the class nibble survives and ports 2-15 fold onto 0 and 1 rather than indexing parts that do
+    // not exist. See the remarks on SendPacket.
+    private const int PortMask = 0x1F;
+
+    // Parts are addressed the way the module addresses them: port times sixteen, plus channel.
+    private static int PartOf(int port, int channel) =>
+        ((port & (PortCount - 1)) * SequenceBuilder.ChannelCount) + channel;
+
+    // Every port has its own drum part, on the same channel within that port.
+    private bool IsDrumPart(int part) => part % SequenceBuilder.ChannelCount == _options.DrumChannel;
 
     private void ControlChange(int channel, Part part, int controller, int value)
     {
@@ -766,7 +874,7 @@ public sealed class ToneGenerator
 
     private void StartNote(int channel, int note, int velocity)
     {
-        if (channel == _options.DrumChannel)
+        if (IsDrumPart(channel))
         {
             StartDrum(channel, note, velocity);
             return;
@@ -882,7 +990,7 @@ public sealed class ToneGenerator
         // The kit's own key is kept alongside the overridden one, because the envelope rate
         // key-follow indexes off the stored plane rather than the plane the override has already
         // doubled the NRPN offset into -- see NoteRenderer.EnvelopeRateKey.
-        var kitKey = _notes.Drums.Key(note, _drumKit);
+        var kitKey = _notes.Drums.Key(note, _drumKit[channel / SequenceBuilder.ChannelCount]);
         var key = _parts[channel].DrumKeys.Apply(kitKey, note, _notes.Noise);
         var rateKey = NoteRenderer.EnvelopeRateKey(kitKey, _parts[channel].DrumKeys.PitchOffset(note));
         var resolved = _notes.Directory.Resolve(key.Tone, note: 60, velocity);
